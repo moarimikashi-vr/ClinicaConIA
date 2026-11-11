@@ -21,3 +21,6 @@ serviceAccountKey.json
 
 # Logs
 *.log
+
+# Source Keras model (73 MB, kept in Drive); the service uses clasificador_v3.onnx
+modelo_fracturas_v3.keras

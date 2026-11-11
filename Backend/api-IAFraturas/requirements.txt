@@ -1,9 +1,9 @@
 fastapi
 uvicorn
-tensorflow==2.21.0
-keras==3.13.2
+numpy
 onnxruntime
 opencv-python-headless
+simplejpeg
 pillow
 pydicom
 firebase-admin

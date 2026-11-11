@@ -3,9 +3,9 @@ import os
 import cv2
 import numpy as np
 import onnxruntime as ort
-import tensorflow as tf
-import keras
 import pydicom
+import simplejpeg
+from PIL import Image
 from fastapi import FastAPI, File, UploadFile, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 import firebase_admin
@@ -14,9 +14,12 @@ from firebase_admin import credentials, storage
 # ==========================================
 # ⚙️ CONFIGURACIÓN DEL PROYECTO
 # ==========================================
-# Clasificador v3: DenseNet121 con preprocess_input y TTA (imagen + espejo) DENTRO del modelo.
-# Su salida es directamente P(fractura).
-MODEL_FILENAME = 'modelo_fracturas_v3.keras'
+# Clasificador v3 exportado a ONNX desde modelo_fracturas_v3.keras (tools/export_v3_onnx.py):
+# una pasada de DenseNet121 con preprocess_input DENTRO del grafo; su salida es P(fractura).
+# El TTA del modelo original (promedio con el espejo horizontal) se hace aquí con dos corridas
+# seguidas, que necesitan mucha menos memoria que ambas ramas en un solo grafo.
+# Se ejecuta con onnxruntime, sin TensorFlow.
+MODEL_FILENAME = 'clasificador_v3.onnx'
 
 # Detector YOLOv8s exportado a ONNX (se ejecuta con onnxruntime, sin Ultralytics).
 YOLO_FILENAME = 'yolo_fracturas.onnx'
@@ -91,10 +94,16 @@ if not firebase_admin._apps:
         print(f"❌ Error conectando Firebase: {e}")
 
 # 3. Cargar el Modelo de IA
+# Sin arena de memoria: onnxruntime devuelve la memoria de cada inferencia en lugar de
+# reservarla (con arena el proceso crecía a ~1.2 GB; sin ella queda en ~150 MB).
+ORT_OPTIONS = ort.SessionOptions()
+ORT_OPTIONS.enable_cpu_mem_arena = False
+ORT_OPTIONS.enable_mem_pattern = False
+
 print("🧠 Cargando cerebro digital...")
 try:
     if os.path.exists(MODEL_FILENAME):
-        MODEL = keras.models.load_model(MODEL_FILENAME)
+        MODEL = ort.InferenceSession(MODEL_FILENAME, ORT_OPTIONS, providers=['CPUExecutionProvider'])
         print("✅ Modelo cargado exitosamente.")
     else:
         print(f"❌ ERROR CRÍTICO: No encuentro el archivo '{MODEL_FILENAME}'")
@@ -106,7 +115,7 @@ except Exception as e:
 # 4. Cargar el detector YOLO (ONNX). Si falta, la API sigue clasificando sin regiones.
 try:
     if os.path.exists(YOLO_FILENAME):
-        YOLO_SESSION = ort.InferenceSession(YOLO_FILENAME, providers=['CPUExecutionProvider'])
+        YOLO_SESSION = ort.InferenceSession(YOLO_FILENAME, ORT_OPTIONS, providers=['CPUExecutionProvider'])
         print("✅ Detector YOLO cargado.")
     else:
         print(f"⚠️ No encuentro '{YOLO_FILENAME}': se responderá sin regiones.")
@@ -144,28 +153,50 @@ def process_dicom(dicom_bytes):
 
 
 def decode_image(image_bytes, filename):
-    """Devuelve la imagen original como matriz RGB uint8 (alto, ancho, 3).
+    """Devuelve (img_clasificador, img_yolo): matrices RGB uint8 (alto, ancho, 3) del mismo tamaño.
 
-    Las coordenadas de las regiones de YOLO se expresan en píxeles de esta matriz,
-    que es el mismo sistema que usa el visor (cornerstone) para el DICOM.
+    Cada modelo recibe la imagen decodificada como en su entrenamiento: el notebook v3 usó
+    tf.io.decode_image (JPEG con DCT rápida "IFAST", que simplejpeg reproduce bit a bit) y
+    YOLO usó cv2.imread (DCT precisa). En DICOM y PNG ambas son la misma matriz.
+    Las coordenadas de las regiones se expresan en píxeles de esta matriz, el mismo sistema
+    que usa el visor (cornerstone) para el DICOM.
     """
     if filename.lower().endswith('.dcm'):
         print(f"🩻 Procesando radiografía DICOM: {filename}")
         img_rgb = process_dicom(image_bytes)
         if img_rgb is None:
             raise ValueError("El archivo DICOM está corrupto o tiene compresión no soportada.")
-        return img_rgb
+        return img_rgb, img_rgb
 
-    # JPG/PNG: mismo decodificador que el notebook de entrenamiento v3
-    return tf.io.decode_image(image_bytes, channels=3, expand_animations=False).numpy()
+    if simplejpeg.is_jpeg(image_bytes):
+        img_clasificador = simplejpeg.decode_jpeg(image_bytes, colorspace='RGB', fastdct=True, fastupsample=False)
+        img_bgr = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+        return img_clasificador, cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+
+    img_rgb = np.asarray(Image.open(io.BytesIO(image_bytes)).convert('RGB'))
+    return img_rgb, img_rgb
 
 
 def prepare_image(img_rgb):
-    """Letterbox a 448x448 igual que el notebook v3 (sin preprocess_input: va dentro del modelo)."""
-    img = tf.image.resize_with_pad(img_rgb, IMG_SIZE[0], IMG_SIZE[1])  # bilineal, centrado, relleno negro
-    img = tf.cast(tf.clip_by_value(tf.round(img), 0, 255), tf.uint8)
-    img = tf.cast(img, tf.float32)
-    return tf.expand_dims(img, 0)  # batch de 1
+    """Letterbox a 448x448 equivalente a tf.image.resize_with_pad + round/clip/uint8 del notebook v3.
+
+    Mismo cálculo de escala y relleno que TensorFlow (en float32) y bilineal con centros de
+    píxel desplazados medio píxel; difiere de TF en a lo más 1 nivel de gris en < 0.4 % de los
+    píxeles. Sin preprocess_input: va dentro del modelo.
+    """
+    h, w = img_rgb.shape[:2]
+    size = IMG_SIZE[0]
+    f32 = np.float32
+    ratio = max(f32(w) / f32(size), f32(h) / f32(size))
+    rh_f, rw_f = f32(h) / ratio, f32(w) / ratio
+    rh, rw = int(np.floor(rh_f)), int(np.floor(rw_f))
+    top = max(0, int(np.floor((f32(size) - rh_f) / f32(2))))
+    left = max(0, int(np.floor((f32(size) - rw_f) / f32(2))))
+    lienzo = np.zeros((size, size, 3), np.float32)  # relleno negro
+    lienzo[top:top + rh, left:left + rw] = cv2.resize(img_rgb.astype(np.float32), (rw, rh),
+                                                      interpolation=cv2.INTER_LINEAR)
+    lienzo = np.clip(np.round(lienzo), 0, 255).astype(np.uint8).astype(np.float32)
+    return lienzo[None]  # batch de 1, NHWC, valores 0-255
 
 
 def detectar_fracturas(img_rgb, conf_min=YOLO_CONF_MIN, iou=YOLO_IOU, size=YOLO_SIZE):
@@ -197,12 +228,16 @@ def detectar_fracturas(img_rgb, conf_min=YOLO_CONF_MIN, iou=YOLO_IOU, size=YOLO_
     return sorted(resultado, key=lambda c: -c['confianza'])
 
 
-def get_prediction_logic(img_rgb, filename_display):
-    """Clasificación v3 + regiones sugeridas por YOLO."""
+def get_prediction_logic(imagenes, filename_display):
+    """Clasificación v3 + regiones sugeridas por YOLO. `imagenes` es la salida de decode_image."""
+    img_clasificador, img_yolo = imagenes
 
-    # Inferencia del clasificador: la salida YA es P(fractura) (promedio con el espejo)
-    prediction = MODEL.predict(prepare_image(img_rgb), verbose=0)
-    score = float(prediction[0][0])
+    # Inferencia del clasificador con TTA: promedio de P(fractura) de la imagen y su espejo
+    x = prepare_image(img_clasificador)
+    nombre = MODEL.get_inputs()[0].name
+    p_imagen = MODEL.run(None, {nombre: x})[0]
+    p_espejo = MODEL.run(None, {nombre: x[:, :, ::-1].copy()})[0]
+    score = float((p_imagen[0][0] + p_espejo[0][0]) / 2.0)
     probability_fracture = score
 
     # UMBRALES DE DECISIÓN (zona de revisión entre ambos)
@@ -224,8 +259,8 @@ def get_prediction_logic(img_rgb, filename_display):
         "raw_score_model": score,
         "analysis_note": "IA sugiere revisión manual." if status_code == "WARNING" else "IA con alta confianza.",
         # Sugerencias de dónde mirar: no confirman la fractura y su ausencia no la descarta
-        "regiones": detectar_fracturas(img_rgb),
-        "image_size": {"width": int(img_rgb.shape[1]), "height": int(img_rgb.shape[0])},
+        "regiones": detectar_fracturas(img_yolo),
+        "image_size": {"width": int(img_yolo.shape[1]), "height": int(img_yolo.shape[0])},
         "model_version": MODEL_VERSION,
     }
 
@@ -250,8 +285,7 @@ async def predict_local(file: UploadFile = File(...)):
 
     try:
         contents = await file.read()
-        img_rgb = decode_image(contents, file.filename)
-        return get_prediction_logic(img_rgb, file.filename)
+        return get_prediction_logic(decode_image(contents, file.filename), file.filename)
     except Exception as e:
         raise HTTPException(500, f"Error analizando imagen: {str(e)}")
 
@@ -279,8 +313,7 @@ async def analyze_firebase(payload: dict = Body(...)):
         image_bytes = blob.download_as_bytes()
 
         # Procesar (pasamos path para detectar extensión) y predecir
-        img_rgb = decode_image(image_bytes, file_path)
-        return get_prediction_logic(img_rgb, file_path)
+        return get_prediction_logic(decode_image(image_bytes, file_path), file_path)
 
     except Exception as e:
         print(f"Error Firebase/Procesamiento: {e}")
