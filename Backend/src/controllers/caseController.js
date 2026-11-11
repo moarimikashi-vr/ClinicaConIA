@@ -1,6 +1,7 @@
 const { db, storageBucket } = require('../config/firebase');
 const transporter = require('../config/mailer');
 
+const admin = require('firebase-admin');
 const axios = require('axios'); // Importar axios para llamadas al servicio de IA
 
 // 5. CREAR UN NUEVO CASO
@@ -38,12 +39,17 @@ const createCase = async (req, res) => {
                             });
 
                             const resultado = iaResponse.data;
+                            const regiones = Array.isArray(resultado.regiones) ? resultado.regiones : [];
+                            const textoRegiones = regiones.length > 0
+                                ? `${regiones.length} zona(s) sugerida(s) por IA; revíselas en el visor (indican dónde mirar, no confirman fractura).`
+                                : 'Sin zonas sugeridas por IA (esto no descarta una fractura).';
 
                             // Crear comentario automático con el diagnóstico
                             const comentarioIA = {
                                 texto: `🤖 -Análisis de Fracturas con IA (${resultado.status})-:\n` +
                                     `- Predicción: ${resultado.prediction}\n` +
                                     `- Confianza: ${resultado.confidence_fracture}%\n` +
+                                    `- Regiones: ${textoRegiones}\n` +
                                     `- Nota: ${resultado.analysis_note}`,
                                 autorId: 'sistema_ia',
                                 autorNombre: 'Asistente IA',
@@ -55,10 +61,22 @@ const createCase = async (req, res) => {
                             await db.collection('casos').doc(docRef.id).collection('comentarios').add(comentarioIA);
 
                             // Actualizar el caso con el último comentario
+                            // Guardar las regiones por archivo (arreglo: las rutas de Storage tienen puntos y diagonales)
+                            const entradaRegiones = {
+                                archivo: archivo.uploadPath,
+                                nombre: archivo.nombre,
+                                modelo: resultado.model_version || 'desconocido',
+                                fecha: comentarioIA.fechaCreacion,
+                                prediction: resultado.prediction,
+                                confidence_fracture: resultado.confidence_fracture,
+                                regiones
+                            };
+
                             await db.collection('casos').doc(docRef.id).update({
                                 lastCommentTimestamp: comentarioIA.fechaCreacion,
                                 lastCommentAutor: comentarioIA.autorNombre,
-                                lastCommentText: `[IA] ${resultado.prediction}`
+                                lastCommentText: `[IA] ${resultado.prediction}`,
+                                iaRegiones: admin.firestore.FieldValue.arrayUnion(entradaRegiones)
                             });
 
                             console.log(`✅ Diagnóstico IA guardado para ${archivo.nombre}`);

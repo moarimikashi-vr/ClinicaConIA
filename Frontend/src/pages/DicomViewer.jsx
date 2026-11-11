@@ -31,7 +31,44 @@ cornerstoneTools.external.cornerstoneMath = cornerstoneMath;
 // Inicializar cornerstone tools
 cornerstoneTools.init();
 
+const IA_COLOR = '#facc15';
 
+// Dibuja las regiones sugeridas por la IA sobre el canvas ya renderizado.
+// Las coordenadas vienen en píxeles de la imagen original; pixelToCanvas aplica zoom, pan, rotación y espejo.
+const drawIARegions = (element, ctx, regiones) => {
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.lineWidth = 2;
+    ctx.font = '12px sans-serif';
+    ctx.textBaseline = 'bottom';
+
+    regiones.forEach((r) => {
+        const corners = [
+            { x: r.x0, y: r.y0 }, { x: r.x1, y: r.y0 },
+            { x: r.x1, y: r.y1 }, { x: r.x0, y: r.y1 },
+        ].map((p) => cornerstone.pixelToCanvas(element, p));
+
+        ctx.strokeStyle = IA_COLOR;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(corners[0].x, corners[0].y);
+        corners.slice(1).forEach((c) => ctx.lineTo(c.x, c.y));
+        ctx.closePath();
+        ctx.stroke();
+
+        const label = `Zona sugerida por IA (${Math.round(r.confianza * 100)} %)`;
+        const lx = Math.min(...corners.map((c) => c.x));
+        const ly = Math.max(Math.min(...corners.map((c) => c.y)) - 2, 14);
+        const width = ctx.measureText(label).width + 8;
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+        ctx.fillRect(lx, ly - 16, width, 16);
+        ctx.fillStyle = IA_COLOR;
+        ctx.fillText(label, lx + 4, ly - 2);
+    });
+
+    ctx.restore();
+};
 
 const DicomViewer = () => {
     const navigate = useNavigate();
@@ -46,6 +83,9 @@ const DicomViewer = () => {
     const [activeTool, setActiveTool] = useState('Wwwc');
     const [measurements, setMeasurements] = useState([]);
     const [elementEnabled, setElementEnabled] = useState(false);
+    const [iaResultado, setIaResultado] = useState(null); // Entrada de caso.iaRegiones para este archivo
+    const [showIA, setShowIA] = useState(true);
+    const iaOverlayRef = useRef({ regiones: [], visible: true });
 
     const [searchParams] = useSearchParams();
 
@@ -113,9 +153,14 @@ const DicomViewer = () => {
         resizeObserver.observe(element);
 
         // Listener para actualizar viewport
-        const handleImageRendered = () => {
+        const handleImageRendered = (event) => {
             const vp = cornerstone.getViewport(element);
             setViewport(vp);
+
+            const { regiones, visible } = iaOverlayRef.current;
+            if (visible && regiones.length > 0 && event.detail?.canvasContext) {
+                drawIARegions(element, event.detail.canvasContext, regiones);
+            }
         };
 
         element.addEventListener('cornerstoneimagerendered', handleImageRendered);
@@ -147,6 +192,39 @@ const DicomViewer = () => {
         }
 
     }, [elementEnabled, searchParams]);
+
+    // Cargar las regiones sugeridas por la IA para este archivo del caso
+    useEffect(() => {
+        const casoId = searchParams.get('caso');
+        const archivo = searchParams.get('archivo');
+        if (!casoId || !archivo) return;
+
+        let cancelado = false;
+        api.get(`/casos/${casoId}`)
+            .then(({ data }) => {
+                if (cancelado) return;
+                const entradas = Array.isArray(data.iaRegiones) ? data.iaRegiones : [];
+                const entrada = entradas.find((e) => e.archivo === archivo || e.nombre === archivo);
+                setIaResultado(entrada || null);
+            })
+            .catch((err) => console.error('No se pudieron cargar las regiones de IA:', err));
+
+        return () => { cancelado = true; };
+    }, [searchParams]);
+
+    // Sincronizar el overlay con el estado y volver a pintar la imagen
+    useEffect(() => {
+        iaOverlayRef.current = { regiones: iaResultado?.regiones || [], visible: showIA };
+        const element = imageElementRef.current;
+        if (!element) return;
+        try {
+            if (cornerstone.getEnabledElement(element)?.image) {
+                cornerstone.updateImage(element);
+            }
+        } catch {
+            // El elemento aún no tiene imagen; se dibujará al renderizar
+        }
+    }, [iaResultado, showIA]);
 
     const fetchPaciente = async (nss) => {
         try {
@@ -547,6 +625,19 @@ const DicomViewer = () => {
                         🗑️ Limpiar Mediciones
                     </button>
 
+                    {iaResultado?.regiones?.length > 0 && (
+                        <button
+                            onClick={() => setShowIA((v) => !v)}
+                            className={`px-3 py-1 rounded text-sm ${showIA
+                                ? 'bg-yellow-500 text-gray-900 hover:bg-yellow-400'
+                                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                                }`}
+                            title="Mostrar u ocultar las zonas sugeridas por la IA"
+                        >
+                            {showIA ? '🟨 Ocultar zonas IA' : '⬜ Mostrar zonas IA'}
+                        </button>
+                    )}
+
                     {viewport && (
                         <div className="ml-auto text-xs text-gray-300 flex items-center gap-3">
                             <span>W/L: {Math.round(viewport.voi.windowCenter)}/{Math.round(viewport.voi.windowWidth)}</span>
@@ -663,6 +754,25 @@ const DicomViewer = () => {
                                         <p className="text-xs">{dicomInfo.sliceThickness} mm</p>
                                     </div>
                                 )}
+                            </div>
+                        </>
+                    )}
+
+                    {/* --- SECCIÓN DEL ASISTENTE IA --- */}
+                    {iaResultado && (
+                        <>
+                            <hr className="border-gray-700 my-3" />
+                            <h2 className="text-lg font-bold mb-2 border-b border-gray-700 pb-2">
+                                Asistente IA
+                            </h2>
+                            <div className="space-y-1 text-sm">
+                                <p><strong>Predicción:</strong> {iaResultado.prediction}</p>
+                                <p><strong>Confianza de fractura:</strong> {iaResultado.confidence_fracture}%</p>
+                                <p><strong>Zonas sugeridas:</strong> {iaResultado.regiones?.length || 0}</p>
+                                <p className="text-xs text-gray-400">Modelo {iaResultado.modelo}</p>
+                                <p className="text-xs text-yellow-300 mt-2">
+                                    Los recuadros indican dónde mirar; no confirman una fractura, y su ausencia no la descarta.
+                                </p>
                             </div>
                         </>
                     )}
