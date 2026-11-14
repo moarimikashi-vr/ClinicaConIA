@@ -1,5 +1,6 @@
 import io
 import os
+import threading
 import cv2
 import numpy as np
 import onnxruntime as ort
@@ -99,6 +100,7 @@ if not firebase_admin._apps:
 ORT_OPTIONS = ort.SessionOptions()
 ORT_OPTIONS.enable_cpu_mem_arena = False
 ORT_OPTIONS.enable_mem_pattern = False
+INFERENCE_LOCK = threading.Lock()
 
 print("🧠 Cargando cerebro digital...")
 try:
@@ -169,8 +171,17 @@ def decode_image(image_bytes, filename):
         return img_rgb, img_rgb
 
     if simplejpeg.is_jpeg(image_bytes):
-        img_clasificador = simplejpeg.decode_jpeg(image_bytes, colorspace='RGB', fastdct=True, fastupsample=False)
-        img_bgr = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+        try:
+            img_clasificador = simplejpeg.decode_jpeg(image_bytes, colorspace='RGB', fastdct=True, fastupsample=False)
+        except Exception as e:
+            print(f"⚠️ simplejpeg no pudo decodificar ({e}); se usa PIL.")
+            img_clasificador = np.asarray(Image.open(io.BytesIO(image_bytes)).convert('RGB'))
+        # Se ignora la orientación EXIF (como tf.io.decode_image) para que ambos modelos y las
+        # coordenadas guardadas compartan el mismo marco de píxeles.
+        img_bgr = cv2.imdecode(np.frombuffer(image_bytes, np.uint8),
+                               cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
+        if img_bgr is None or img_bgr.shape != img_clasificador.shape:
+            return img_clasificador, img_clasificador
         return img_clasificador, cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
     img_rgb = np.asarray(Image.open(io.BytesIO(image_bytes)).convert('RGB'))
@@ -189,7 +200,8 @@ def prepare_image(img_rgb):
     f32 = np.float32
     ratio = max(f32(w) / f32(size), f32(h) / f32(size))
     rh_f, rw_f = f32(h) / ratio, f32(w) / ratio
-    rh, rw = int(np.floor(rh_f)), int(np.floor(rw_f))
+    # max(1, ...): una imagen extremadamente alargada no puede quedar con un lado de 0 px
+    rh, rw = max(1, int(np.floor(rh_f))), max(1, int(np.floor(rw_f)))
     top = max(0, int(np.floor((f32(size) - rh_f) / f32(2))))
     left = max(0, int(np.floor((f32(size) - rw_f) / f32(2))))
     lienzo = np.zeros((size, size, 3), np.float32)  # relleno negro
@@ -203,6 +215,8 @@ def detectar_fracturas(img_rgb, conf_min=YOLO_CONF_MIN, iou=YOLO_IOU, size=YOLO_
     """Copia de la función verificada en Detector_Fracturas_YOLO.ipynb (sección 9).
 
     Devuelve [{confianza, x0, y0, x1, y1}] en píxeles de la imagen original, ordenada por confianza.
+    A diferencia del notebook, las cajas se recortan a los bordes de la imagen (las que tocan el
+    relleno gris del letterbox darían coordenadas negativas o fuera de rango).
     """
     if YOLO_SESSION is None:
         return []
@@ -219,13 +233,26 @@ def detectar_fracturas(img_rgb, conf_min=YOLO_CONF_MIN, iou=YOLO_IOU, size=YOLO_
     if len(conf) == 0:
         return []
     idx = cv2.dnn.NMSBoxes(cajas.tolist(), conf.tolist(), conf_min, iou)
+    def a_original(v, desplazamiento, limite):
+        return round(float(np.clip((v - desplazamiento) / s, 0, limite)), 1)
+
     resultado = []
     for i in np.array(idx).flatten():
         x0, y0, bw, bh = cajas[i]
         resultado.append({'confianza': round(float(conf[i]), 4),
-                          'x0': round(float((x0 - left) / s), 1), 'y0': round(float((y0 - top) / s), 1),
-                          'x1': round(float((x0 + bw - left) / s), 1), 'y1': round(float((y0 + bh - top) / s), 1)})
+                          'x0': a_original(x0, left, w0), 'y0': a_original(y0, top, h0),
+                          'x1': a_original(x0 + bw, left, w0), 'y1': a_original(y0 + bh, top, h0)})
     return sorted(resultado, key=lambda c: -c['confianza'])
+
+
+def regiones_seguras(img_rgb):
+    """El detector solo sugiere dónde mirar: si falla, se responde sin regiones y la
+    clasificación ya calculada no se pierde."""
+    try:
+        return detectar_fracturas(img_rgb)
+    except Exception as e:
+        print(f"⚠️ Detector YOLO falló, se responde sin regiones: {e}")
+        return []
 
 
 def get_prediction_logic(imagenes, filename_display):
@@ -259,7 +286,7 @@ def get_prediction_logic(imagenes, filename_display):
         "raw_score_model": score,
         "analysis_note": "IA sugiere revisión manual." if status_code == "WARNING" else "IA con alta confianza.",
         # Sugerencias de dónde mirar: no confirman la fractura y su ausencia no la descarta
-        "regiones": detectar_fracturas(img_yolo),
+        "regiones": regiones_seguras(img_yolo),
         "image_size": {"width": int(img_yolo.shape[1]), "height": int(img_yolo.shape[0])},
         "model_version": MODEL_VERSION,
     }
@@ -278,20 +305,31 @@ def home():
         "support": "JPG, PNG, DICOM",
     }
 
+def analizar(image_bytes, filename):
+    """Decodifica y analiza una imagen, una a la vez.
+
+    Las rutas son `def` (no `async def`): FastAPI las corre en su pool de hilos y la inferencia
+    (~1 s de CPU) no bloquea el event loop. El candado mantiene una sola inferencia en curso
+    para que el pico de memoria no se multiplique con peticiones simultáneas.
+    """
+    with INFERENCE_LOCK:
+        return get_prediction_logic(decode_image(image_bytes, filename), filename)
+
+
 # --- RUTA 1: Para pruebas rápidas desde tu PC ---
 @app.post("/predict_local")
-async def predict_local(file: UploadFile = File(...)):
+def predict_local(file: UploadFile = File(...)):
     if MODEL is None: raise HTTPException(500, "Modelo no cargado.")
 
     try:
-        contents = await file.read()
-        return get_prediction_logic(decode_image(contents, file.filename), file.filename)
+        contents = file.file.read()
+        return analizar(contents, file.filename)
     except Exception as e:
         raise HTTPException(500, f"Error analizando imagen: {str(e)}")
 
 # --- RUTA 2: Para tu sistema real (Conexión Firebase) ---
 @app.post("/analyze_firebase")
-async def analyze_firebase(payload: dict = Body(...)):
+def analyze_firebase(payload: dict = Body(...)):
     """
     Recibe un JSON: { "path": "pacientes/juan/radio_torax.dcm" }
     Descarga el archivo de Firebase y lo analiza.
@@ -313,7 +351,7 @@ async def analyze_firebase(payload: dict = Body(...)):
         image_bytes = blob.download_as_bytes()
 
         # Procesar (pasamos path para detectar extensión) y predecir
-        return get_prediction_logic(decode_image(image_bytes, file_path), file_path)
+        return analizar(image_bytes, file_path)
 
     except Exception as e:
         print(f"Error Firebase/Procesamiento: {e}")

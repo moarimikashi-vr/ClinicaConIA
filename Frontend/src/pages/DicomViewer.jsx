@@ -204,8 +204,15 @@ const DicomViewer = () => {
             .then(({ data }) => {
                 if (cancelado) return;
                 const entradas = Array.isArray(data.iaRegiones) ? data.iaRegiones : [];
-                const entrada = entradas.find((e) => e.archivo === archivo || e.nombre === archivo);
-                setIaResultado(entrada || null);
+                // Coincidencia exacta por ruta; por nombre solo si ninguna ruta coincide
+                // (casos antiguos sin uploadPath). Si se analizó varias veces, gana la más reciente.
+                const porRuta = entradas.filter((e) => e.archivo === archivo);
+                const candidatas = porRuta.length > 0 ? porRuta : entradas.filter((e) => e.nombre === archivo);
+                const entrada = candidatas.reduce(
+                    (ultima, e) => (!ultima || (e.fecha || '') > (ultima.fecha || '') ? e : ultima),
+                    null,
+                );
+                setIaResultado(entrada);
             })
             .catch((err) => console.error('No se pudieron cargar las regiones de IA:', err));
 

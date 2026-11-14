@@ -61,23 +61,31 @@ const createCase = async (req, res) => {
                             await db.collection('casos').doc(docRef.id).collection('comentarios').add(comentarioIA);
 
                             // Actualizar el caso con el último comentario
-                            // Guardar las regiones por archivo (arreglo: las rutas de Storage tienen puntos y diagonales)
-                            const entradaRegiones = {
-                                archivo: archivo.uploadPath,
-                                nombre: archivo.nombre,
-                                modelo: resultado.model_version || 'desconocido',
-                                fecha: comentarioIA.fechaCreacion,
-                                prediction: resultado.prediction,
-                                confidence_fracture: resultado.confidence_fracture,
-                                regiones
-                            };
-
                             await db.collection('casos').doc(docRef.id).update({
                                 lastCommentTimestamp: comentarioIA.fechaCreacion,
                                 lastCommentAutor: comentarioIA.autorNombre,
-                                lastCommentText: `[IA] ${resultado.prediction}`,
-                                iaRegiones: admin.firestore.FieldValue.arrayUnion(entradaRegiones)
+                                lastCommentText: `[IA] ${resultado.prediction}`
                             });
+
+                            // Guardar las regiones por archivo en una escritura aparte, para que un fallo aquí
+                            // no afecte al comentario. Es un arreglo porque las rutas de Storage tienen puntos
+                            // y diagonales. Firestore rechaza `undefined`, por eso cada campo tiene respaldo.
+                            try {
+                                const entradaRegiones = {
+                                    archivo: archivo.uploadPath || archivo.nombre || null,
+                                    nombre: archivo.nombre || null,
+                                    modelo: resultado.model_version || 'desconocido',
+                                    fecha: comentarioIA.fechaCreacion,
+                                    prediction: resultado.prediction ?? null,
+                                    confidence_fracture: resultado.confidence_fracture ?? null,
+                                    regiones
+                                };
+                                await db.collection('casos').doc(docRef.id).update({
+                                    iaRegiones: admin.firestore.FieldValue.arrayUnion(entradaRegiones)
+                                });
+                            } catch (regionesError) {
+                                console.error(`⚠️ No se pudieron guardar las regiones IA de ${archivo.nombre}:`, regionesError.message);
+                            }
 
                             console.log(`✅ Diagnóstico IA guardado para ${archivo.nombre}`);
                         }
