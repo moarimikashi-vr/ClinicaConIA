@@ -7,6 +7,8 @@ import * as cornerstoneTools from 'cornerstone-tools';
 import * as dicomParser from 'dicom-parser';
 import Hammer from 'hammerjs';
 import api from '../api/axiosConfig'; // Usar instancia configurada
+import { db } from '../firebaseConfig';
+import { doc, onSnapshot } from 'firebase/firestore';
 
 // Configurar cornerstone
 cornerstoneWADOImageLoader.external.cornerstone = cornerstone;
@@ -193,31 +195,34 @@ const DicomViewer = () => {
 
     }, [elementEnabled, searchParams]);
 
-    // Cargar las regiones sugeridas por la IA para este archivo del caso
+    // Escuchar el caso en vivo: el análisis de IA es asíncrono, así que si el visor se abre
+    // antes de que termine, los recuadros aparecen solos cuando el backend guarda iaRegiones.
+    const casoId = searchParams.get('caso');
+    const archivoIA = searchParams.get('archivo');
     useEffect(() => {
-        const casoId = searchParams.get('caso');
-        const archivo = searchParams.get('archivo');
-        if (!casoId || !archivo) return;
+        if (!casoId || !archivoIA) return undefined;
 
-        let cancelado = false;
-        api.get(`/casos/${casoId}`)
-            .then(({ data }) => {
-                if (cancelado) return;
+        const unsubscribe = onSnapshot(
+            doc(db, 'casos', casoId),
+            (snap) => {
+                const data = snap.exists() ? snap.data() : {};
                 const entradas = Array.isArray(data.iaRegiones) ? data.iaRegiones : [];
                 // Coincidencia exacta por ruta; por nombre solo si ninguna ruta coincide
-                // (casos antiguos sin uploadPath). Si se analizó varias veces, gana la más reciente.
-                const porRuta = entradas.filter((e) => e.archivo === archivo);
-                const candidatas = porRuta.length > 0 ? porRuta : entradas.filter((e) => e.nombre === archivo);
+                // (casos antiguos sin uploadPath). Si se analizó varias veces, gana la más reciente
+                // (fecha es una cadena ISO 8601, que se ordena correctamente como texto).
+                const porRuta = entradas.filter((e) => e.archivo === archivoIA);
+                const candidatas = porRuta.length > 0 ? porRuta : entradas.filter((e) => e.nombre === archivoIA);
                 const entrada = candidatas.reduce(
                     (ultima, e) => (!ultima || (e.fecha || '') > (ultima.fecha || '') ? e : ultima),
                     null,
                 );
                 setIaResultado(entrada);
-            })
-            .catch((err) => console.error('No se pudieron cargar las regiones de IA:', err));
+            },
+            (err) => console.error('No se pudieron cargar las regiones de IA:', err),
+        );
 
-        return () => { cancelado = true; };
-    }, [searchParams]);
+        return unsubscribe;
+    }, [casoId, archivoIA]);
 
     // Sincronizar el overlay con el estado y volver a pintar la imagen
     useEffect(() => {
