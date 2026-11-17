@@ -185,13 +185,19 @@ const EnvioArchivos = ({ loggedInUser }) => {
 
         try {
             // Subir archivos a Firebase Storage
-            const uploadPromises = envioData.archivosDICOM.map(async (fileWrapper) => {
+            // Nombres con caracteres seguros: el backend y el servicio de IA solo aceptan [A-Za-z0-9._-]
+            const safeName = (text) => text.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9._-]+/g, '_');
+            const totalArchivos = envioData.archivosDICOM.length;
+
+            const uploadPromises = envioData.archivosDICOM.map(async (fileWrapper, index) => {
                 const file = fileWrapper.fileObject;
 
-                const originalExtension = file.name.slice(file.name.lastIndexOf('.'));
-                const patientName = `${envioData.pacienteSeleccionado.nombre} ${envioData.pacienteSeleccionado.apellidoP}`.replace(/\s+/g, '_');
+                const originalExtension = safeName(file.name.slice(file.name.lastIndexOf('.')).toLowerCase());
+                const patientName = safeName(`${envioData.pacienteSeleccionado.nombre} ${envioData.pacienteSeleccionado.apellidoP}`);
                 const uploadDate = new Date().toISOString().slice(0, 10).split('-').reverse().join('-');
-                const newFileName = `${patientName}-${envioData.pacienteSeleccionado.nss}-${uploadDate}${originalExtension}`;
+                // Con varios archivos, un sufijo evita que se sobrescriban entre sí en Storage
+                const suffix = totalArchivos > 1 ? `-${index + 1}` : '';
+                const newFileName = `${patientName}-${safeName(String(envioData.pacienteSeleccionado.nss))}-${uploadDate}${suffix}${originalExtension}`;
 
                 const filePath = `casos/${loggedInUser.uid}/${envioData.pacienteSeleccionado.nss}/${newFileName}`;
                 const fileRef = ref(storage, filePath);

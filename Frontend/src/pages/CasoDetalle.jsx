@@ -142,8 +142,11 @@ const CasoDetalle = ({ loggedInUser }) => {
     const handleGenerateReport = async () => {
         setIsGeneratingReport(true);
         try {
-            // Primero guardamos el diagnóstico actual para asegurar que salga en el PDF
-            await apiClient.patch(`/casos/${id}`, { diagnostico });
+            // El especialista asignado guarda primero el diagnóstico en edición para que salga en el PDF;
+            // los demás descargan el diagnóstico ya guardado (el backend solo le permite escribirlo a él)
+            if (esMedicoAsignado && isCasoAbierto && diagnostico !== (caso.diagnostico || '')) {
+                await apiClient.patch(`/casos/${id}`, { diagnostico });
+            }
 
             const response = await apiClient.post(`/reports/${id}/generate`, {}, {
                 responseType: 'blob' // Importante para descargar archivos
