@@ -1,5 +1,7 @@
+import hmac
 import io
 import os
+import re
 import threading
 import cv2
 import numpy as np
@@ -7,8 +9,7 @@ import onnxruntime as ort
 import pydicom
 import simplejpeg
 from PIL import Image
-from fastapi import FastAPI, File, UploadFile, HTTPException, Body
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, File, UploadFile, HTTPException, Body, Depends, Header
 import firebase_admin
 from firebase_admin import credentials, storage
 
@@ -49,14 +50,26 @@ IMG_SIZE = (448, 448)
 # ==========================================
 app = FastAPI(title="API de Radiodiagnóstico (Soporte DICOM)")
 
-# 1. Configurar CORS (Permitir peticiones desde tu Frontend)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], 
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# 1. Sin CORS: este servicio solo lo llama el backend (servidor a servidor), nunca un navegador.
+
+# Secreto compartido con el backend (variable IA_SERVICE_TOKEN en ambos servicios).
+# Sin secreto configurado el servicio rechaza los análisis (falla cerrado).
+IA_SERVICE_TOKEN = os.environ.get('IA_SERVICE_TOKEN', '')
+if not IA_SERVICE_TOKEN:
+    print("⚠️ IA_SERVICE_TOKEN no está configurado: los endpoints de análisis responderán 503.")
+
+MAX_FILE_BYTES = 50 * 1024 * 1024  # 50 MB por estudio
+# Solo estudios subidos por la plataforma: casos/<uid>/<nss>/<archivo>
+STORAGE_PATH_PATTERN = re.compile(r'^casos/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+/[A-Za-z0-9._-]+$')
+
+
+def require_service_token(x_ia_token: str = Header(default='')):
+    """Autoriza solo al backend, que envía el secreto compartido en el encabezado X-IA-Token."""
+    if not IA_SERVICE_TOKEN:
+        raise HTTPException(503, "Servicio de análisis sin configurar.")
+    if not hmac.compare_digest(x_ia_token.encode(), IA_SERVICE_TOKEN.encode()):
+        raise HTTPException(401, "No autorizado.")
+
 
 # 2. Conectar a Firebase
 if not firebase_admin._apps:
@@ -316,44 +329,52 @@ def analizar(image_bytes, filename):
         return get_prediction_logic(decode_image(image_bytes, filename), filename)
 
 
-# --- RUTA 1: Para pruebas rápidas desde tu PC ---
-@app.post("/predict_local")
+# --- RUTA 1: Para pruebas rápidas (requiere el mismo secreto que el backend) ---
+@app.post("/predict_local", dependencies=[Depends(require_service_token)])
 def predict_local(file: UploadFile = File(...)):
     if MODEL is None: raise HTTPException(500, "Modelo no cargado.")
 
+    contents = file.file.read(MAX_FILE_BYTES + 1)
+    if len(contents) > MAX_FILE_BYTES:
+        raise HTTPException(413, "El archivo supera el tamaño máximo de 50 MB.")
     try:
-        contents = file.file.read()
         return analizar(contents, file.filename)
     except Exception as e:
-        raise HTTPException(500, f"Error analizando imagen: {str(e)}")
+        print(f"Error analizando imagen local: {e}")
+        raise HTTPException(500, "No se pudo analizar la imagen.")
 
 # --- RUTA 2: Para tu sistema real (Conexión Firebase) ---
-@app.post("/analyze_firebase")
+@app.post("/analyze_firebase", dependencies=[Depends(require_service_token)])
 def analyze_firebase(payload: dict = Body(...)):
     """
-    Recibe un JSON: { "path": "pacientes/juan/radio_torax.dcm" }
+    Recibe un JSON: { "path": "casos/<uid>/<nss>/<archivo>.dcm" }
     Descarga el archivo de Firebase y lo analiza.
     """
     if MODEL is None: raise HTTPException(500, "Modelo no cargado.")
 
     file_path = payload.get("path")
-    if not file_path:
+    if not isinstance(file_path, str) or not file_path:
         raise HTTPException(400, "Falta el campo 'path' en el JSON.")
+    if not STORAGE_PATH_PATTERN.match(file_path) or '..' in file_path.split('/'):
+        raise HTTPException(400, "Ruta de estudio no válida.")
 
     print(f"📥 Solicitando a Firebase: {file_path}")
 
     try:
-        # Acceder al Bucket
         bucket = storage.bucket()
-        blob = bucket.blob(file_path)
+        blob = bucket.get_blob(file_path)
+    except Exception as e:
+        print(f"Error Firebase: {e}")
+        raise HTTPException(502, "No se pudo consultar el almacenamiento.")
+    if blob is None:
+        raise HTTPException(404, "El estudio no existe.")
+    if blob.size is not None and blob.size > MAX_FILE_BYTES:
+        raise HTTPException(413, "El estudio supera el tamaño máximo de 50 MB.")
 
-        # Descargar a memoria RAM (sin guardar en disco)
+    try:
+        # Descargar a memoria RAM (sin guardar en disco) y analizar
         image_bytes = blob.download_as_bytes()
-
-        # Procesar (pasamos path para detectar extensión) y predecir
         return analizar(image_bytes, file_path)
-
     except Exception as e:
         print(f"Error Firebase/Procesamiento: {e}")
-        # Retornamos error 404 si no existe la imagen, o 500 si falló el análisis
-        raise HTTPException(404, detail=f"No se pudo procesar la imagen: {str(e)}")
+        raise HTTPException(422, "No se pudo procesar la imagen.")

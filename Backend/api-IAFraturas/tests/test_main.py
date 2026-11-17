@@ -190,15 +190,64 @@ def test_home_reports_versions(main):
     assert body["status"] == "online" and body["model_version"] == "v3+yolo"
 
 
-def test_predict_without_model_returns_500(main):
-    r = TestClient(main.app).post("/predict_local", files={"file": ("x.png", b"123", "image/png")})
+TOKEN = {"X-IA-Token": "test-secret"}
+
+
+@pytest.fixture
+def service_token(main, monkeypatch):
+    monkeypatch.setattr(main, "IA_SERVICE_TOKEN", "test-secret")
+
+
+def test_predict_without_model_returns_500(main, service_token):
+    r = TestClient(main.app).post("/predict_local", files={"file": ("x.png", b"123", "image/png")}, headers=TOKEN)
     assert r.status_code == 500
 
 
-def test_predict_local_returns_classification_and_regions(main, fakes):
+def test_predict_local_returns_classification_and_regions(main, fakes, service_token):
     fakes(FakeClassifier(0.1), FakeYolo(yolo_output((160, 240, 160, 80, 0.9))))
     png = cv2.imencode(".png", np.zeros((400, 800), np.uint8))[1].tobytes()
-    r = TestClient(main.app).post("/predict_local", files={"file": ("x.png", png, "image/png")})
+    r = TestClient(main.app).post("/predict_local", files={"file": ("x.png", png, "image/png")}, headers=TOKEN)
     body = r.json()
     assert r.status_code == 200
     assert body["prediction"] == "SANO" and len(body["regiones"]) == 1
+
+
+# --- Service authentication and input limits ---------------------------------------------
+
+@pytest.mark.parametrize("route, kwargs", [
+    ("/predict_local", {"files": {"file": ("x.png", b"123", "image/png")}}),
+    ("/analyze_firebase", {"json": {"path": "casos/u1/123/a.dcm"}}),
+])
+def test_analysis_endpoints_require_the_service_token(main, fakes, service_token, route, kwargs):
+    fakes(FakeClassifier(0.1))
+    client = TestClient(main.app)
+    assert client.post(route, **kwargs).status_code == 401
+    assert client.post(route, headers={"X-IA-Token": "wrong"}, **kwargs).status_code == 401
+
+
+def test_analysis_is_refused_when_no_token_is_configured(main, fakes, monkeypatch):
+    fakes(FakeClassifier(0.1))
+    monkeypatch.setattr(main, "IA_SERVICE_TOKEN", "")
+    r = TestClient(main.app).post("/analyze_firebase", json={"path": "casos/u1/123/a.dcm"}, headers={"X-IA-Token": ""})
+    assert r.status_code == 503
+
+
+@pytest.mark.parametrize("path", [
+    "pacientes/u1/123/a.dcm", "casos/u1/123/../../secret.dcm", "casos/u1/123/sub/a.dcm", "casos/u1/a.dcm", "", 123,
+])
+def test_analyze_firebase_only_accepts_study_paths(main, fakes, service_token, path):
+    fakes(FakeClassifier(0.1))
+    r = TestClient(main.app).post("/analyze_firebase", json={"path": path}, headers=TOKEN)
+    assert r.status_code == 400
+
+
+def test_predict_local_rejects_files_over_the_size_limit(main, fakes, service_token, monkeypatch):
+    fakes(FakeClassifier(0.1))
+    monkeypatch.setattr(main, "MAX_FILE_BYTES", 10)
+    r = TestClient(main.app).post("/predict_local", files={"file": ("x.png", b"0" * 11, "image/png")}, headers=TOKEN)
+    assert r.status_code == 413
+
+
+def test_no_wildcard_cors_headers(main):
+    r = TestClient(main.app).get("/", headers={"Origin": "https://evil.example"})
+    assert "access-control-allow-origin" not in r.headers
