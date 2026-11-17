@@ -1,7 +1,18 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import toast from 'react-hot-toast';
+import { ArrowUpTrayIcon, DocumentIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 import apiClient from '../api/axiosConfig';
+import {
+    cardClass,
+    cardTitleClass,
+    inputClass,
+    labelClass,
+    pageTitleClass,
+    primaryButton,
+    secondaryButton,
+} from '../components/ui/formStyles';
 import { storage } from '../firebaseConfig';
-import useDebounce from '../hooks/useDebounce.js'; // CORRECCIÓN: Usar ruta absoluta desde la raíz del proyecto
+import useDebounce from '../hooks/useDebounce.js';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 const initialEnvioState = {
@@ -14,10 +25,32 @@ const initialEnvioState = {
 
 
 
+// Paso numerado: el envío es una secuencia real (paciente → motivo → estudios → especialista).
+// Definido a nivel de módulo: si se declarara dentro del render, React lo remontaría en cada
+// render y los campos de su interior perderían el foco.
+const Step = ({ number, title, children, disabledHint, enabled }) => (
+    <section className={`${cardClass} p-6`}>
+        <div className="flex items-center gap-3">
+            <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-blue-900 text-xs font-semibold text-white">
+                {number}
+            </span>
+            <h2 className={cardTitleClass}>{title}</h2>
+        </div>
+        {disabledHint && !enabled && <p className="mt-2 text-sm text-slate-500">{disabledHint}</p>}
+        <div className="mt-4">{children}</div>
+    </section>
+);
+
+const InfoRow = ({ label, children }) => (
+    <div className="flex justify-between gap-3 py-1.5 text-sm">
+        <dt className="text-slate-500">{label}</dt>
+        <dd className="text-right font-medium text-slate-900">{children}</dd>
+    </div>
+);
+
 const EnvioArchivos = ({ loggedInUser }) => {
     const [envioData, setEnvioData] = useState({ ...initialEnvioState, nssBusqueda: '' });
     const [doctors, setDoctors] = useState([]);
-    const [statusMessage, setStatusMessage] = useState('');
     const [isUploading, setIsUploading] = useState(false);
     const [searchResults, setSearchResults] = useState([]);
     const [isSearching, setIsSearching] = useState(false);
@@ -32,8 +65,8 @@ const EnvioArchivos = ({ loggedInUser }) => {
             try {
                 const response = await apiClient.get('/users/doctors');
                 setDoctors(response.data);
-            } catch (error) {
-                setStatusMessage('❌ Error al cargar los médicos especialistas.');
+            } catch {
+                toast.error('No se pudo cargar la lista de especialistas.');
             }
         };
         fetchDoctors();
@@ -91,10 +124,9 @@ const EnvioArchivos = ({ loggedInUser }) => {
 
     // El botón "Buscar" es el que carga los datos del paciente.
     const handleSearchClick = async (nssToSearch) => {
-        setStatusMessage('');
         const nss = nssToSearch || envioData.nssBusqueda;
         if (!nss) {
-            setStatusMessage('⚠️ Ingrese un NSS para buscar.');
+            toast.error('Escribe un NSS para buscar.');
             return;
         }
 
@@ -102,10 +134,9 @@ const EnvioArchivos = ({ loggedInUser }) => {
             const response = await apiClient.get(`/pacientes/${nss}`);
             // CORRECCIÓN: Al cargar el paciente, también actualizamos el input `nssBusqueda` para que muestre el NSS completo.
             setEnvioData(prev => ({ ...prev, pacienteSeleccionado: response.data, nssBusqueda: response.data.nss }));
-            setStatusMessage(`✅ Paciente ${response.data.nombre} cargado.`);
-        } catch (error) {
+        } catch {
             setEnvioData(prev => ({ ...prev, pacienteSeleccionado: null }));
-            setStatusMessage(`❌ Paciente con NSS ${nss} no encontrado.`);
+            toast.error(`No existe un paciente con NSS ${nss}.`);
         }
     };
 
@@ -134,24 +165,23 @@ const EnvioArchivos = ({ loggedInUser }) => {
             archivosDICOM: filesArray
         }));
 
-        setStatusMessage(`📂 ${filesArray.length} archivos listos para enviar.`);
     };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
 
         if (!envioData.pacienteSeleccionado || !envioData.medicoDestinoId || !envioData.motivoConsulta) {
-            setStatusMessage('⚠️ Complete todos los campos requeridos (Paciente, Motivo y Médico).');
+            toast.error('Completa el paciente, el motivo de consulta y el especialista.');
             return;
         }
 
         if (envioData.archivosDICOM.length === 0) {
-            setStatusMessage('⚠️ Debe cargar al menos un archivo.');
+            toast.error('Agrega al menos un estudio.');
             return;
         }
 
         setIsUploading(true);
-        setStatusMessage('⏳ Subiendo archivos, por favor espera...');
+        const toastId = toast.loading('Subiendo estudios…');
 
         try {
             // Subir archivos a Firebase Storage
@@ -175,7 +205,7 @@ const EnvioArchivos = ({ loggedInUser }) => {
                     }
                 };
 
-                const snapshot = await uploadBytes(fileRef, file, metadata);
+                await uploadBytes(fileRef, file, metadata);
                 const downloadURL = await getDownloadURL(fileRef);
 
                 return {
@@ -189,8 +219,7 @@ const EnvioArchivos = ({ loggedInUser }) => {
 
             const archivosParaGuardar = await Promise.all(uploadPromises);
 
-            setIsUploading(false);
-            setStatusMessage('✅ Archivos subidos. Guardando caso...');
+            toast.loading('Creando el caso…', { id: toastId });
 
             const nuevoCaso = {
                 pacienteNSS: envioData.pacienteSeleccionado.nss,
@@ -216,211 +245,226 @@ const EnvioArchivos = ({ loggedInUser }) => {
             }
 
             setEnvioData({ ...initialEnvioState, nssBusqueda: '' });
-            setStatusMessage(`🚀 Caso enviado a Dr. ${nuevoCaso.medicoEspecialistaNombre} completado.`);
+            setIsUploading(false);
+            toast.success(`Caso enviado a ${nuevoCaso.medicoEspecialistaNombre}.`, { id: toastId });
         } catch (error) {
             setIsUploading(false);
             console.error('Error completo:', error);
-            setStatusMessage(`❌ Error al enviar el caso: ${error.response?.data?.message || error.message}`);
+            toast.error(`No se pudo enviar el caso: ${error.response?.data?.message || error.message}`, { id: toastId });
         }
     };
 
-    const inputStyle = "w-full p-3 bg-gray-200 rounded-lg border-none focus:ring-2 focus:ring-blue-500 focus:outline-none";
-    const cardStyle = "p-6 bg-gray-100 rounded-xl shadow-md";
-    const titleStyle = "text-lg font-semibold mb-2 text-gray-800";
-
     const paciente = envioData.pacienteSeleccionado;
+    const totalMB = (envioData.archivosDICOM.reduce((sum, f) => sum + f.size, 0) / 1024 / 1024).toFixed(2);
 
     return (
-        <div className="p-8 font-sans">
-            <h1 className="text-3xl font-bold mb-8 text-gray-800">Envío de Archivos Clínicos</h1>
+        <div className="mx-auto w-full max-w-6xl px-2 py-4 sm:px-4">
+            <header className="mb-6">
+                <h1 className={pageTitleClass}>Enviar estudios</h1>
+                <p className="mt-1 text-sm text-slate-600">
+                    Crea un caso clínico con los estudios del paciente y asígnalo a un especialista.
+                </p>
+            </header>
 
-            {statusMessage && (
-                <div className={`p-4 mb-6 rounded-md font-medium ${statusMessage.startsWith('✅') || statusMessage.startsWith('🚀') ? 'bg-green-100 text-green-700' :
-                        statusMessage.startsWith('⏳') ? 'bg-blue-100 text-blue-700' :
-                            'bg-blue-100 text-blue-700'
-                    }`}>
-                    {statusMessage}
-                </div>
-            )}
+            <form onSubmit={handleSubmit} className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+                <div className="min-w-0 space-y-6">
+                    <Step number="1" title="Paciente" enabled>
+                        <label htmlFor="nssBusqueda" className={labelClass}>NSS o nombre del paciente</label>
+                        <div className="flex items-start gap-2">
+                            <div className="relative flex-grow">
+                                <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 mt-0.5 h-5 w-5 -translate-y-1/2 text-slate-400" />
+                                <input
+                                    id="nssBusqueda"
+                                    type="text"
+                                    name="nssBusqueda"
+                                    value={envioData.nssBusqueda}
+                                    onChange={handleChange}
+                                    onFocus={() => setIsSearchFocused(true)}
+                                    onBlur={handleSearchBlur}
+                                    className={`${inputClass(false)} pl-10`}
+                                    autoComplete="off"
+                                    role="combobox"
+                                    aria-expanded={isSearchFocused && debouncedSearchTerm.length > 0}
+                                    aria-controls="resultados-paciente"
+                                />
 
-            <form onSubmit={handleSubmit} className="flex flex-col md:flex-row space-y-6 md:space-y-0 md:space-x-8">
-
-                <div className="w-full md:w-2/3 space-y-6">
-
-                    <div className="flex items-start space-x-4">
-                        <div className="relative flex-grow">
-                            <input
-                                type="text"
-                                name="nssBusqueda"
-                                placeholder="NSS del paciente"
-                                value={envioData.nssBusqueda}
-                                onChange={handleChange}
-                                onFocus={() => setIsSearchFocused(true)}
-                                onBlur={handleSearchBlur}
-                                className={inputStyle}
-                                autoComplete="off"
-                                required
-                            />
-
-                            {/* --- LISTA DE RESULTADOS DE BÚSQUEDA --- */}
-                            {/* Ahora solo se muestra si el input tiene foco Y hay texto */}
-                            {isSearchFocused && debouncedSearchTerm.length > 0 && (
-                                <ul className="absolute z-10 w-full bg-white border border-gray-300 rounded-lg mt-1 shadow-lg max-h-60 overflow-y-auto" role="listbox">
-                                    {isSearching ? (
-                                        <li className="px-4 py-3 text-gray-500 italic">Buscando...</li>
-                                    ) : searchResults.length === 0 && debouncedSearchTerm.length > 0 ? (
-                                        <li className="px-4 py-3 text-gray-500 italic">No se encontraron coincidencias.</li>
-                                    ) : (
-                                        searchResults.map(p => (
-                                            <li
-                                                key={p.id}
-                                                onClick={() => handleSelectPaciente(p)}
-                                                className="px-4 py-3 cursor-pointer hover:bg-blue-100"
-                                                role="option"
-                                            >
-                                                <p className="font-semibold text-gray-800">{p.nss}</p>
-                                                <p className="text-sm text-gray-600">{p.nombre} {p.apellidoP}</p>
-                                            </li>
-                                        )))}
-                                </ul>
-                            )}
+                                {/* Resultados: solo con foco y texto */}
+                                {isSearchFocused && debouncedSearchTerm.length > 0 && (
+                                    <ul
+                                        id="resultados-paciente"
+                                        className="absolute z-10 mt-1 max-h-60 w-full overflow-y-auto overscroll-contain rounded-xl border border-slate-200 bg-white py-1 shadow-lg"
+                                        role="listbox"
+                                    >
+                                        {isSearching ? (
+                                            <li className="px-4 py-3 text-sm text-slate-500">Buscando…</li>
+                                        ) : searchResults.length === 0 ? (
+                                            <li className="px-4 py-3 text-sm text-slate-500">Ningún paciente coincide.</li>
+                                        ) : (
+                                            searchResults.map(p => (
+                                                <li
+                                                    key={p.id || p.nss}
+                                                    onClick={() => handleSelectPaciente(p)}
+                                                    className="cursor-pointer px-4 py-2.5 hover:bg-slate-50"
+                                                    role="option"
+                                                    aria-selected="false"
+                                                >
+                                                    <p className="text-sm font-medium text-slate-900">{p.nombre} {p.apellidoP}</p>
+                                                    <p className="font-mono text-xs tabular-nums text-slate-500">NSS {p.nss}</p>
+                                                </li>
+                                            )))}
+                                    </ul>
+                                )}
+                            </div>
+                            <button type="button" onClick={() => handleSearchClick()} className={`${secondaryButton} mt-1`}>
+                                Buscar
+                            </button>
                         </div>
-                        <button
-                            type="button"
-                            onClick={() => handleSearchClick()}
-                            className="p-3 bg-blue-500 text-white font-semibold rounded-lg hover:bg-blue-600 transition duration-200 shadow-md"
-                        >
-                            Buscar
-                        </button>
-                    </div>
+                        {paciente && (
+                            <p className="mt-2 text-sm text-emerald-800">
+                                Paciente seleccionado: <strong>{paciente.nombre} {paciente.apellidoP}</strong>
+                            </p>
+                        )}
+                    </Step>
 
-                    <div className={cardStyle}>
-                        <h2 className={titleStyle}>Motivo de la consulta</h2>
+                    <Step enabled={Boolean(paciente)} number="2" title="Motivo de la consulta" disabledHint="Selecciona primero al paciente.">
+                        <label htmlFor="motivoConsulta" className="sr-only">Motivo de la consulta</label>
                         <textarea
+                            id="motivoConsulta"
                             name="motivoConsulta"
-                            placeholder="El paciente llegó con malestar por dolor..."
+                            placeholder="Ej.: dolor en la pierna derecha tras una caída hace dos días."
                             value={envioData.motivoConsulta}
                             onChange={handleChange}
-                            // CORRECCIÓN 1: Deshabilitar si no hay paciente
                             disabled={!paciente}
-                            className={`${inputStyle} h-32 resize-none disabled:bg-gray-200 disabled:cursor-not-allowed`}
-                            required
+                            rows="4"
+                            className={`${inputClass(false)} resize-y`}
                         />
-                    </div>
+                    </Step>
 
-                    <div className={cardStyle}>
-                        <h2 className={titleStyle}>Carga de Imágenes (DICOM/JPG/PNG)</h2>
-                        <input
-                            ref={fileInputRef} // 3. Asignamos la referencia al input
-                            type="file"
-                            name="archivosDICOM"
-                            onChange={handleFileChange}
-                            multiple
-                            accept=".dcm,image/*"
-                            // CORRECCIÓN 1: Deshabilitar si no hay paciente
-                            disabled={!paciente}
-                            className="w-full p-2 bg-white rounded-lg border border-gray-300 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-100 file:text-blue-700 hover:file:bg-blue-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                        />
+                    <Step enabled={Boolean(paciente)} number="3" title="Estudios" disabledHint="Selecciona primero al paciente.">
+                        <label
+                            htmlFor="archivosDICOM"
+                            className={`flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-8 text-center transition-colors duration-150 has-[:focus-visible]:ring-4 has-[:focus-visible]:ring-blue-900/20 ${paciente
+                                ? 'cursor-pointer border-slate-300 hover:border-blue-900 hover:bg-blue-50/40'
+                                : 'cursor-not-allowed border-slate-200 bg-slate-50 opacity-60'
+                                }`}
+                        >
+                            <ArrowUpTrayIcon className="h-7 w-7 text-slate-400" />
+                            <span className="text-sm font-medium text-slate-900">Elige los archivos del estudio</span>
+                            <span className="text-xs text-slate-500">DICOM (.dcm), JPG o PNG. Puedes elegir varios.</span>
+                            <input
+                                id="archivosDICOM"
+                                ref={fileInputRef}
+                                type="file"
+                                name="archivosDICOM"
+                                onChange={handleFileChange}
+                                multiple
+                                accept=".dcm,image/*"
+                                disabled={!paciente}
+                                className="sr-only"
+                            />
+                        </label>
 
-                        <p className="text-sm text-gray-500 mt-3">
-                            Archivos cargados: {envioData.archivosDICOM.length}
-                            {envioData.archivosDICOM.length > 0 && (
-                                <span className="ml-2 text-xs">
-                                    ({(envioData.archivosDICOM.reduce((sum, f) => sum + f.size, 0) / 1024 / 1024).toFixed(2)} MB total)
-                                </span>
-                            )}
-                        </p>
-
-                        <div className="flex space-x-2 mt-2 overflow-x-auto pb-2">
-                            {envioData.archivosDICOM.slice(0, 5).map((file, index) => (
-                                <div key={index} className="flex-shrink-0">
-                                    {file.url ? (
-                                        <img
-                                            src={file.url}
-                                            alt={`Preview ${file.name}`}
-                                            className="w-24 h-24 object-cover rounded-md border border-gray-300 shadow-sm"
-                                            onLoad={() => URL.revokeObjectURL(file.url)}
-                                        />
-                                    ) : (
-                                        <div className="w-24 h-24 flex items-center justify-center bg-gray-300 rounded-md border border-gray-400">
-                                            <div className="text-center">
-                                                <div className="text-2xl">📄</div>
-                                                <div className="text-xs mt-1">.dcm</div>
-                                            </div>
-                                        </div>
+                        {envioData.archivosDICOM.length > 0 && (
+                            <>
+                                <p className="mt-4 text-sm text-slate-600">
+                                    {envioData.archivosDICOM.length} {envioData.archivosDICOM.length === 1 ? 'archivo' : 'archivos'} · {totalMB} MB
+                                </p>
+                                <ul className="mt-2 flex gap-3 overflow-x-auto pb-2">
+                                    {envioData.archivosDICOM.slice(0, 6).map((file, index) => (
+                                        <li key={index} className="w-24 flex-shrink-0">
+                                            {file.url ? (
+                                                <img
+                                                    src={file.url}
+                                                    alt={`Vista previa de ${file.name}`}
+                                                    className="h-24 w-24 rounded-lg object-cover outline outline-1 -outline-offset-1 outline-black/10"
+                                                    onLoad={() => URL.revokeObjectURL(file.url)}
+                                                />
+                                            ) : (
+                                                <div className="flex h-24 w-24 flex-col items-center justify-center gap-1 rounded-lg border border-slate-200 bg-slate-50 text-slate-500">
+                                                    <DocumentIcon className="h-7 w-7" />
+                                                    <span className="text-xs font-medium">DICOM</span>
+                                                </div>
+                                            )}
+                                            <p className="mt-1 truncate text-center text-xs text-slate-600" title={file.name}>{file.name}</p>
+                                        </li>
+                                    ))}
+                                    {envioData.archivosDICOM.length > 6 && (
+                                        <li className="flex items-center text-sm font-medium text-slate-600">
+                                            +{envioData.archivosDICOM.length - 6} más
+                                        </li>
                                     )}
-                                    <p className="text-xs text-center mt-1 truncate w-24" title={file.name}>
-                                        {file.name}
-                                    </p>
-                                </div>
-                            ))}
-                            {envioData.archivosDICOM.length > 5 && (
-                                <div className="flex items-center">
-                                    <span className="text-sm font-medium text-gray-600">
-                                        +{envioData.archivosDICOM.length - 5} más
-                                    </span>
-                                </div>
-                            )}
-                        </div>
-                    </div>
+                                </ul>
+                            </>
+                        )}
+                    </Step>
 
-                    <div className={cardStyle}>
-                        <h2 className={titleStyle}>Seleccionar Médico Destino</h2>
+                    <Step enabled={Boolean(paciente)} number="4" title="Especialista" disabledHint="Selecciona primero al paciente.">
+                        <label htmlFor="medicoDestinoId" className="sr-only">Especialista que recibe el caso</label>
                         <select
+                            id="medicoDestinoId"
                             name="medicoDestinoId"
                             value={envioData.medicoDestinoId}
                             onChange={handleChange}
-                            // CORRECCIÓN 1: Deshabilitar si no hay paciente
                             disabled={!paciente}
-                            className={`${inputStyle} disabled:bg-gray-200 disabled:cursor-not-allowed`} required
+                            className={inputClass(false)}
                         >
-                            <option value="">-- Seleccionar Médico --</option>
+                            <option value="">Elige un especialista</option>
                             {doctors.map(doc => (
                                 <option key={doc.id} value={doc.id}>
                                     Dr. {doc.nombre} {doc.apellido}
                                 </option>
                             ))}
                         </select>
-                    </div>
+                    </Step>
 
-                    <button
-                        type="submit"
-                        className="w-full p-4 bg-blue-500 text-white font-bold rounded-lg hover:bg-blue-600 transition duration-200 shadow-lg disabled:bg-gray-400"
-                        disabled={!paciente || isUploading}
-                    >
-                        {isUploading ? 'Subiendo archivos...' : 'Enviar Información'}
-                    </button>
+                    <div className="flex justify-end">
+                        <button type="submit" className={primaryButton} disabled={!paciente || isUploading}>
+                            {isUploading && (
+                                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true" />
+                            )}
+                            {isUploading ? 'Enviando…' : 'Enviar caso'}
+                        </button>
+                    </div>
                 </div>
 
-                <div className="w-full md:w-1/3 space-y-6">
-
+                {/* Resumen del paciente seleccionado */}
+                <aside className="space-y-6 lg:sticky lg:top-0 lg:self-start">
                     {paciente ? (
                         <>
-                            <div className={cardStyle}>
-                                <h2 className={titleStyle}>Información Básica del Paciente</h2>
-                                <p className="text-sm"><strong className="font-medium">Nombre:</strong> {paciente.nombre || 'N/A'}</p>
-                                <p className="text-sm"><strong className="font-medium">Apellido:</strong> {paciente.apellidoP} {paciente.apellidoM || 'N/A'}</p>
-                                <p className="text-sm"><strong className="font-medium">Tipo de sangre:</strong> {paciente.tiposangre || 'N/A'}</p>
-                                <p className="text-sm"><strong className="font-medium">Estatura:</strong> {paciente.estatura || 'N/A'} m</p>
-                                <p className="text-sm"><strong className="font-medium">Peso:</strong> {paciente.peso || 'N/A'} kg</p>
-                                <p className="text-sm"><strong className="font-medium">Edad:</strong> {paciente.edad || 'N/A'} años</p>
-                                <p className="text-sm"><strong className="font-medium">Diabetes:</strong> {paciente.diabetes ? 'Sí' : 'No'}</p>
-                                <p className="text-sm"><strong className="font-medium">Hipertensión:</strong> {paciente.hipertension ? 'Sí' : 'No'}</p>
-                            </div>
-
-                            <div className={cardStyle}>
-                                <h2 className={titleStyle}>Historia Clínica</h2>
-                                <p className="text-sm"><strong className="font-medium">Antecedentes:</strong> {paciente.antecedentes || 'N/A'}</p>
-                                <p className="text-sm"><strong className="font-medium">Síntomas:</strong> {paciente.sintomascla || 'N/A'}</p>
-                                <p className="text-sm"><strong className="font-medium">Medicamentos:</strong> {paciente.medicamentos || 'N/A'}</p>
-                            </div>
+                            <section className={`${cardClass} p-5`}>
+                                <h2 className={cardTitleClass}>{paciente.nombre} {paciente.apellidoP} {paciente.apellidoM}</h2>
+                                <p className="mt-0.5 font-mono text-xs tabular-nums text-slate-500">NSS {paciente.nss}</p>
+                                <dl className="mt-3 divide-y divide-slate-100">
+                                    <InfoRow label="Edad">{paciente.edad || '—'} años</InfoRow>
+                                    <InfoRow label="Tipo de sangre">{paciente.tiposangre || '—'}</InfoRow>
+                                    <InfoRow label="Estatura">{paciente.estatura || '—'} m</InfoRow>
+                                    <InfoRow label="Peso">{paciente.peso || '—'} kg</InfoRow>
+                                    <InfoRow label="Diabetes">{paciente.diabetes ? 'Sí' : 'No'}</InfoRow>
+                                    <InfoRow label="Hipertensión">{paciente.hipertension ? 'Sí' : 'No'}</InfoRow>
+                                </dl>
+                            </section>
+                            <section className={`${cardClass} space-y-3 p-5 text-sm`}>
+                                <h2 className={cardTitleClass}>Historia clínica</h2>
+                                <div>
+                                    <p className="text-xs font-medium text-slate-500">Antecedentes</p>
+                                    <p className="text-slate-800">{paciente.antecedentes || 'Sin registro.'}</p>
+                                </div>
+                                <div>
+                                    <p className="text-xs font-medium text-slate-500">Síntomas</p>
+                                    <p className="text-slate-800">{paciente.sintomascla || 'Sin registro.'}</p>
+                                </div>
+                                <div>
+                                    <p className="text-xs font-medium text-slate-500">Medicamentos</p>
+                                    <p className="text-slate-800">{paciente.medicamentos || 'Sin registro.'}</p>
+                                </div>
+                            </section>
                         </>
                     ) : (
-                        <div className={`${cardStyle} text-gray-500 italic`}>
-                            Busque un paciente por NSS para ver su información aquí.
+                        <div className={`${cardClass} p-5 text-sm text-slate-500`}>
+                            Busca al paciente por NSS o nombre para ver aquí su información.
                         </div>
                     )}
-                </div>
+                </aside>
             </form>
         </div>
     );
