@@ -1,5 +1,6 @@
 const PDFDocument = require('pdfkit');
 const { db } = require('../config/firebase');
+const { canAccessCase } = require('../security/policies');
 
 const generateReport = async (req, res) => {
     try {
@@ -12,13 +13,18 @@ const generateReport = async (req, res) => {
         }
 
         const caso = doc.data();
+        if (!canAccessCase(req.user, caso)) {
+            return res.status(403).json({ message: 'No tienes permiso para ver este caso.' });
+        }
+        // El NSS va en un encabezado HTTP: solo caracteres seguros
+        const safeNss = String(caso.pacienteNSS || 'caso').replace(/[^A-Za-z0-9_-]/g, '');
 
         // Crear el documento PDF
         const docPDF = new PDFDocument();
 
         // Configurar headers para descarga
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename=Reporte_${caso.pacienteNSS}.pdf`);
+        res.setHeader('Content-Disposition', `attachment; filename=Reporte_${safeNss}.pdf`);
 
         docPDF.pipe(res);
 

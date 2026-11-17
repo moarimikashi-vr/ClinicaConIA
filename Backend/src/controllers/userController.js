@@ -1,25 +1,25 @@
 const { admin, db } = require('../config/firebase');
 const { z } = require('zod');
+const { isAdmin, ROLES } = require('../security/policies');
 
 // Esquema de validación para registro
 const registerSchema = z.object({
-    nombre: z.string().min(2, 'El nombre debe tener al menos 2 caracteres'),
-    apellido: z.string().min(2, 'El apellido debe tener al menos 2 caracteres'),
-    email: z.string().email('Formato de email inválido'),
-    contrasena: z.string().min(6, 'La contraseña debe tener al menos 6 caracteres'),
-    rol: z.enum(['medico', 'atencion', 'administrador'], 'Rol no válido')
+    nombre: z.string().trim().min(2, 'El nombre debe tener al menos 2 caracteres').max(80),
+    apellido: z.string().trim().min(2, 'El apellido debe tener al menos 2 caracteres').max(80),
+    email: z.string().trim().email('Formato de email inválido').max(254),
+    contrasena: z.string().min(6, 'La contraseña debe tener al menos 6 caracteres').max(128),
+    rol: z.enum(ROLES, 'Rol no válido')
 });
 
-// 1. REGISTRAR UN NUEVO USUARIO
+// 1. REGISTRAR UN NUEVO USUARIO (solo administrador; la ruta aplica requireRole)
 const registerUser = async (req, res) => {
     try {
-        // Validar datos con Zod
         const validationResult = registerSchema.safeParse(req.body);
 
         if (!validationResult.success) {
             return res.status(400).json({
                 message: 'Datos inválidos',
-                errors: validationResult.error.errors.map(e => e.message)
+                errors: validationResult.error.issues.map(e => e.message)
             });
         }
 
@@ -40,6 +40,7 @@ const registerUser = async (req, res) => {
             email,
         });
 
+        console.log(`[AUDIT] Usuario ${userRecord.uid} (${rol}) creado por ${req.user.uid}`);
         res.status(201).json({ uid: userRecord.uid, message: 'Usuario registrado con éxito' });
     } catch (error) {
         console.error('Error al registrar usuario:', error);
@@ -50,17 +51,14 @@ const registerUser = async (req, res) => {
     }
 };
 
-// 2.1 OBTENER TODOS LOS MÉDICOS ESPECIALISTAS
+// 2.1 OBTENER LOS MÉDICOS ESPECIALISTAS (solo lo necesario para asignar un caso)
 const getDoctors = async (req, res) => {
     try {
-        const usersRef = db.collection('users');
-        const snapshot = await usersRef.where('rol', '==', 'medico').get();
-
-        if (snapshot.empty) {
-            return res.status(200).json([]);
-        }
-
-        const doctors = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const snapshot = await db.collection('users').where('rol', '==', 'medico').get();
+        const doctors = snapshot.docs.map(doc => {
+            const { nombre, apellido } = doc.data();
+            return { id: doc.id, nombre, apellido };
+        });
         res.status(200).json(doctors);
     } catch (error) {
         console.error('Error al obtener médicos:', error);
@@ -68,26 +66,21 @@ const getDoctors = async (req, res) => {
     }
 };
 
-// 2. OBTENER DATOS DE UN USUARIO
+// 2. OBTENER DATOS DE UN USUARIO (el propio perfil, o cualquiera si es administrador)
 const getUserById = async (req, res) => {
     try {
         const { uid } = req.params;
-        console.log(`🔍 [GET USER] Buscando usuario con UID: ${uid}`);
+
+        if (uid !== req.user.uid && !isAdmin(req.user)) {
+            return res.status(403).json({ message: 'No tienes permiso para ver este usuario.' });
+        }
 
         const userDoc = await db.collection('users').doc(uid).get();
 
         if (!userDoc.exists) {
-            console.warn(`⚠️ [GET USER] Usuario NO encontrado en Firestore. UID buscado: ${uid}`);
-
-            // DEBUG: Listar qué usuarios SÍ existen para comparar
-            const allUsers = await db.collection('users').select().get();
-            const existingIds = allUsers.docs.map(doc => doc.id);
-            console.log(`📋 [DEBUG] IDs disponibles en 'users':`, existingIds);
-
-            return res.status(404).json({ message: 'Datos de usuario no encontrados.', debug_ids: existingIds });
+            return res.status(404).json({ message: 'Datos de usuario no encontrados.' });
         }
 
-        console.log(`✅ [GET USER] Usuario encontrado: ${userDoc.data().email} (${userDoc.data().rol})`);
         res.status(200).json({ id: userDoc.id, ...userDoc.data() });
     } catch (error) {
         console.error('Error al obtener datos de usuario:', error);
