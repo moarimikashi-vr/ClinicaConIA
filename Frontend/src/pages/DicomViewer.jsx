@@ -266,7 +266,8 @@ const DicomViewer = () => {
         let fileName = 'archivo.dcm';
         try {
             const urlFileName = new URL(url).pathname.split('/').pop();
-            fileName = decodeURIComponent(urlFileName);
+            // Firebase Storage codifica la ruta completa (casos%2F...%2Farchivo.dcm): se muestra solo el nombre
+            fileName = decodeURIComponent(urlFileName).split('/').pop();
             setDicomFile({ name: fileName });
         } catch (e) {
             setDicomFile({ name: fileName });
