@@ -13,6 +13,8 @@ import apiClient from '../api/axiosConfig';
 import { db } from '../firebaseConfig'; // Importamos la instancia de la DB
 import { doc, onSnapshot, collection, query, orderBy } from 'firebase/firestore';
 import { usePersistentToggle } from '../hooks/usePersistentToggle';
+import InfoRow from '../components/ui/InfoRow';
+import { IA_AUTHOR_ID } from '../constants/ia';
 import {
     cardClass,
     cardTitleClass,
@@ -37,13 +39,6 @@ const ROL_LABELS = {
     administrador: 'Administrador',
     sistema: 'Sistema',
 };
-
-const InfoRow = ({ label, children }) => (
-    <div className="flex justify-between gap-3 py-1.5 text-sm">
-        <dt className="text-slate-500">{label}</dt>
-        <dd className="text-right font-medium text-slate-900">{children}</dd>
-    </div>
-);
 
 const CasoDetalle = ({ loggedInUser }) => {
     const { id } = useParams(); // Obtiene el ID del caso desde la URL
@@ -337,7 +332,7 @@ const CasoDetalle = ({ loggedInUser }) => {
                         <ol className="mt-4 max-h-[28rem] space-y-3 overflow-y-auto overscroll-contain pr-1">
                             {comentarios.length > 0 ? (
                                 comentarios.map((com, index) => {
-                                    const esIA = com.autorId === 'sistema_ia';
+                                    const esIA = com.autorId === IA_AUTHOR_ID;
                                     const esPropio = com.autorId === loggedInUser.uid;
                                     return (
                                         <li

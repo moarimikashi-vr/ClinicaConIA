@@ -13,6 +13,7 @@ import {
 } from '../components/ui/formStyles';
 import { storage } from '../firebaseConfig';
 import useDebounce from '../hooks/useDebounce.js';
+import InfoRow from '../components/ui/InfoRow';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 const initialEnvioState = {
@@ -28,7 +29,8 @@ const initialEnvioState = {
 // Paso numerado: el envío es una secuencia real (paciente → motivo → estudios → especialista).
 // Definido a nivel de módulo: si se declarara dentro del render, React lo remontaría en cada
 // render y los campos de su interior perderían el foco.
-const Step = ({ number, title, children, disabledHint, enabled }) => (
+// `showHint` solo muestra el aviso; cada control del paso se deshabilita por su cuenta.
+const Step = ({ number, title, children, disabledHint, showHint }) => (
     <section className={`${cardClass} p-6`}>
         <div className="flex items-center gap-3">
             <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-blue-900 text-xs font-semibold text-white">
@@ -36,16 +38,9 @@ const Step = ({ number, title, children, disabledHint, enabled }) => (
             </span>
             <h2 className={cardTitleClass}>{title}</h2>
         </div>
-        {disabledHint && !enabled && <p className="mt-2 text-sm text-slate-500">{disabledHint}</p>}
+        {disabledHint && showHint && <p className="mt-2 text-sm text-slate-500">{disabledHint}</p>}
         <div className="mt-4">{children}</div>
     </section>
-);
-
-const InfoRow = ({ label, children }) => (
-    <div className="flex justify-between gap-3 py-1.5 text-sm">
-        <dt className="text-slate-500">{label}</dt>
-        <dd className="text-right font-medium text-slate-900">{children}</dd>
-    </div>
 );
 
 const EnvioArchivos = ({ loggedInUser }) => {
@@ -274,7 +269,7 @@ const EnvioArchivos = ({ loggedInUser }) => {
 
             <form onSubmit={handleSubmit} className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
                 <div className="min-w-0 space-y-6">
-                    <Step number="1" title="Paciente" enabled>
+                    <Step number="1" title="Paciente">
                         <label htmlFor="nssBusqueda" className={labelClass}>NSS o nombre del paciente</label>
                         <div className="flex items-start gap-2">
                             <div className="relative flex-grow">
@@ -332,7 +327,7 @@ const EnvioArchivos = ({ loggedInUser }) => {
                         )}
                     </Step>
 
-                    <Step enabled={Boolean(paciente)} number="2" title="Motivo de la consulta" disabledHint="Selecciona primero al paciente.">
+                    <Step showHint={!paciente} number="2" title="Motivo de la consulta" disabledHint="Selecciona primero al paciente.">
                         <label htmlFor="motivoConsulta" className="sr-only">Motivo de la consulta</label>
                         <textarea
                             id="motivoConsulta"
@@ -346,7 +341,7 @@ const EnvioArchivos = ({ loggedInUser }) => {
                         />
                     </Step>
 
-                    <Step enabled={Boolean(paciente)} number="3" title="Estudios" disabledHint="Selecciona primero al paciente.">
+                    <Step showHint={!paciente} number="3" title="Estudios" disabledHint="Selecciona primero al paciente.">
                         <label
                             htmlFor="archivosDICOM"
                             className={`flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-8 text-center transition-colors duration-150 has-[:focus-visible]:ring-4 has-[:focus-visible]:ring-blue-900/20 ${paciente
@@ -404,7 +399,7 @@ const EnvioArchivos = ({ loggedInUser }) => {
                         )}
                     </Step>
 
-                    <Step enabled={Boolean(paciente)} number="4" title="Especialista" disabledHint="Selecciona primero al paciente.">
+                    <Step showHint={!paciente} number="4" title="Especialista" disabledHint="Selecciona primero al paciente.">
                         <label htmlFor="medicoDestinoId" className="sr-only">Especialista que recibe el caso</label>
                         <select
                             id="medicoDestinoId"

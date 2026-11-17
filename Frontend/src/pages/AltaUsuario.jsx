@@ -91,7 +91,8 @@ const AltaUsuario = () => {
         const found = validate(userData);
         setErrors(found);
         if (Object.keys(found).length > 0) {
-            document.getElementById(Object.keys(found)[0] === 'rol' ? 'rol-medico' : Object.keys(found)[0])?.focus();
+            const first = Object.keys(found)[0];
+            document.getElementById(first === 'rol' ? `rol-${userRoles[0].value}` : first)?.focus();
             return;
         }
 

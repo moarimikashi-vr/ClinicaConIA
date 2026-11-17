@@ -9,6 +9,7 @@ import Hammer from 'hammerjs';
 import api from '../api/axiosConfig'; // Usar instancia configurada
 import { db } from '../firebaseConfig';
 import { doc, onSnapshot } from 'firebase/firestore';
+import { IA_PREDICTION } from '../constants/ia';
 import {
     ArrowLeftIcon, ArrowPathIcon, ExclamationTriangleIcon, EyeIcon, EyeSlashIcon, HandRaisedIcon,
     MagnifyingGlassIcon, MagnifyingGlassMinusIcon, MagnifyingGlassPlusIcon, PhotoIcon, SparklesIcon, TrashIcon, ViewColumnsIcon,
@@ -42,6 +43,21 @@ cornerstoneTools.external.cornerstoneMath = cornerstoneMath;
 cornerstoneTools.init();
 
 const IA_COLOR = '#facc15';
+
+// Fila etiqueta/valor del panel oscuro. A nivel de módulo: definida dentro del render se
+// remontaba en cada actualización del viewport (arrastre de W/L, zoom).
+const Row = ({ label, children }) => (
+    <div className="flex justify-between gap-3 py-1">
+        <dt className="text-slate-400">{label}</dt>
+        <dd className="text-right font-medium text-slate-100 truncate">{children}</dd>
+    </div>
+);
+
+const IA_CHIP_CLASSES = {
+    [IA_PREDICTION.HEALTHY]: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+    [IA_PREDICTION.FRACTURE]: 'border-red-500/40 bg-red-500/10 text-red-300',
+};
+const IA_CHIP_REVIEW = 'border-amber-500/40 bg-amber-500/10 text-amber-300';
 const INFO_PANEL_KEY = 'ui.viewerInfoPanel';
 
 // Dibuja las regiones sugeridas por la IA sobre el canvas ya renderizado.
@@ -119,7 +135,7 @@ const DicomViewer = () => {
     // Atajo "I" para mostrar u ocultar el panel, salvo mientras se escribe en un campo
     useEffect(() => {
         const onKeyDown = (e) => {
-            if (e.ctrlKey || e.metaKey || e.altKey || e.key.toLowerCase() !== 'i') return;
+            if (e.repeat || e.ctrlKey || e.metaKey || e.altKey || e.key?.toLowerCase() !== 'i') return;
             const tag = e.target?.tagName;
             if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) return;
             toggleInfo();
@@ -574,17 +590,8 @@ const DicomViewer = () => {
     const divider = <span className="mx-1 h-6 w-px bg-slate-700" aria-hidden="true" />;
     const sectionTitle = 'mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400';
 
-    const iaChip = {
-        'SANO': 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
-        'FRACTURA DETECTADA': 'border-red-500/40 bg-red-500/10 text-red-300',
-    }[iaResultado?.prediction] || 'border-amber-500/40 bg-amber-500/10 text-amber-300';
-
-    const Row = ({ label, children }) => (
-        <div className="flex justify-between gap-3 py-1">
-            <dt className="text-slate-400">{label}</dt>
-            <dd className="text-right font-medium text-slate-100 truncate">{children}</dd>
-        </div>
-    );
+    // Cualquier etiqueta que no sea SANO o FRACTURA se muestra como revisión (ámbar)
+    const iaChip = IA_CHIP_CLASSES[iaResultado?.prediction] || IA_CHIP_REVIEW;
 
     const showToolbar = dicomFile && !loading && !error;
 

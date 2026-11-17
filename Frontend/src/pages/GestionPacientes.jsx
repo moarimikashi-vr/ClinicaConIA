@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { MagnifyingGlassIcon, PlusIcon } from '@heroicons/react/24/outline';
@@ -70,24 +70,30 @@ const GestionPacientes = () => {
 
     const debouncedSearchTerm = useDebounce(searchTerm, 300);
 
-    const fetchPacientes = async (searchQuery = '') => {
+    // Cada búsqueda recibe un número; solo la más reciente actualiza la tabla. Así una
+    // respuesta lenta de una búsqueda anterior no pisa los resultados de la actual.
+    const latestRequest = useRef(0);
+    const fetchPacientes = useCallback(async (searchQuery = '') => {
+        const requestId = ++latestRequest.current;
         setLoading(true);
         try {
             const response = await apiClient.get('/pacientes/search', { params: { q: searchQuery } });
+            if (requestId !== latestRequest.current) return;
             setPacientes(response.data);
             setError('');
         } catch {
+            if (requestId !== latestRequest.current) return;
             setError('No se pudieron cargar los pacientes. Revisa tu conexión e inténtalo de nuevo.');
             setPacientes([]); // En caso de error, vaciamos la lista para evitar mostrar datos viejos
         } finally {
-            setLoading(false);
+            if (requestId === latestRequest.current) setLoading(false);
         }
-    };
+    }, []);
 
     // Se ejecuta en la carga inicial y cada vez que cambia la búsqueda (con debounce)
     useEffect(() => {
         fetchPacientes(debouncedSearchTerm);
-    }, [debouncedSearchTerm]);
+    }, [debouncedSearchTerm, fetchPacientes]);
 
     const handleDelete = async () => {
         if (!pacienteToDelete) return;

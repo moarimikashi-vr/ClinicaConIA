@@ -23,7 +23,11 @@ const readCollapsedPreference = () => {
     } catch {
         // Almacenamiento no disponible: se usa el valor por defecto
     }
-    return typeof window !== 'undefined' && !window.matchMedia('(min-width: 768px)').matches;
+    try {
+        return typeof window.matchMedia === 'function' && !window.matchMedia('(min-width: 768px)').matches;
+    } catch {
+        return false;
+    }
 };
 
 const ROLE_LABELS = {
@@ -65,7 +69,10 @@ const MainLayout = ({ userRole, onLogout }) => {
     // Atajo Ctrl/Cmd + B
     useEffect(() => {
         const onKeyDown = (e) => {
-            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+            // No mientras se escribe: Ctrl+B es negrita/marcadores en campos de texto
+            const tag = e.target?.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) return;
+            if (!e.repeat && (e.ctrlKey || e.metaKey) && e.key?.toLowerCase() === 'b') {
                 e.preventDefault();
                 toggleSidebar();
             }

@@ -46,6 +46,35 @@ const clasificarIMC = (imc) => {
     return { label: 'Obesidad', tone: 'bg-red-50 text-red-800 border-red-200' };
 };
 
+// Componentes a nivel de módulo: dentro del render se recrearían en cada tecla y los
+// campos perderían el foco si alguien los usara como JSX.
+const FieldError = ({ name, error }) => (error ? <p id={`${name}-error`} className={errorClass}>{error}</p> : null);
+
+// Campo numérico con la unidad dentro del input
+const NumberWithUnit = ({ name, label, unit, step, placeholder, value, error, onChange, disabled }) => (
+    <div>
+        <label htmlFor={name} className={labelClass}>{label}</label>
+        <div className="relative">
+            <input
+                id={name}
+                name={name}
+                type="number"
+                inputMode="decimal"
+                step={step}
+                placeholder={placeholder}
+                value={value}
+                onChange={onChange}
+                disabled={disabled}
+                aria-invalid={Boolean(error)}
+                aria-describedby={error ? `${name}-error` : undefined}
+                className={`${inputClass(Boolean(error))} pr-12 tabular-nums`}
+            />
+            <span className="pointer-events-none absolute inset-y-0 right-0 mt-1 flex items-center pr-3 text-sm text-slate-500">{unit}</span>
+        </div>
+        <FieldError name={name} error={error} />
+    </div>
+);
+
 const AltaPaciente = ({ loggedInUser }) => {
     const { nss } = useParams(); // Obtenemos el NSS de la URL si existe
     const isEditMode = !!nss; // Si hay NSS, estamos editando
@@ -170,28 +199,6 @@ const AltaPaciente = ({ loggedInUser }) => {
         'aria-invalid': Boolean(errors[name]),
         'aria-describedby': errors[name] ? `${name}-error` : undefined,
     });
-    const FieldError = ({ name }) => (errors[name] ? <p id={`${name}-error`} className={errorClass}>{errors[name]}</p> : null);
-
-    // Campo numérico con unidad dentro del input
-    const NumberWithUnit = ({ name, label, unit, step, placeholder }) => (
-        <div>
-            <label htmlFor={name} className={labelClass}>{label}</label>
-            <div className="relative">
-                <input
-                    {...fieldProps(name)}
-                    type="number"
-                    inputMode="decimal"
-                    step={step}
-                    placeholder={placeholder}
-                    value={pacienteData[name]}
-                    className={`${inputClass(Boolean(errors[name]))} pr-12 tabular-nums`}
-                />
-                <span className="pointer-events-none absolute inset-y-0 right-0 mt-1 flex items-center pr-3 text-sm text-slate-500">{unit}</span>
-            </div>
-            <FieldError name={name} />
-        </div>
-    );
-
     const imcInfo = clasificarIMC(pacienteData.imc);
     const title = isReadOnly ? 'Expediente del paciente' : isEditMode ? 'Editar paciente' : 'Registrar paciente';
     const checkboxes = [
@@ -232,7 +239,7 @@ const AltaPaciente = ({ loggedInUser }) => {
                             <div className="sm:col-span-2">
                                 <label htmlFor="nombre" className={labelClass}>Nombre</label>
                                 <input {...fieldProps('nombre')} type="text" autoComplete="off" value={pacienteData.nombre} className={inputClass(Boolean(errors.nombre))} />
-                                <FieldError name="nombre" />
+                                <FieldError name="nombre" error={errors.nombre} />
                             </div>
                             <div>
                                 <label htmlFor="apellidoP" className={labelClass}>Apellido paterno</label>
@@ -245,7 +252,7 @@ const AltaPaciente = ({ loggedInUser }) => {
                             <div className="sm:col-span-2">
                                 <label htmlFor="nss" className={labelClass}>NSS (Número de Seguridad Social)</label>
                                 <input {...fieldProps('nss')} type="text" inputMode="numeric" autoComplete="off" value={pacienteData.nss} className={`${inputClass(Boolean(errors.nss))} font-mono tabular-nums`} />
-                                <FieldError name="nss" />
+                                <FieldError name="nss" error={errors.nss} />
                             </div>
                         </div>
                     </section>
@@ -260,9 +267,9 @@ const AltaPaciente = ({ loggedInUser }) => {
                                     {TIPOS_SANGRE.map((t) => <option key={t} value={t}>{t}</option>)}
                                 </select>
                             </div>
-                            {NumberWithUnit({ name: 'edad', label: 'Edad', unit: 'años', step: '1', placeholder: '0' })}
-                            {NumberWithUnit({ name: 'estatura', label: 'Estatura', unit: 'm', step: '0.01', placeholder: '0.00' })}
-                            {NumberWithUnit({ name: 'peso', label: 'Peso', unit: 'kg', step: '0.1', placeholder: '0.0' })}
+                            <NumberWithUnit name="edad" label="Edad" unit="años" step="1" placeholder="0" value={pacienteData.edad} error={errors.edad} onChange={handleChange} disabled={disabled} />
+                            <NumberWithUnit name="estatura" label="Estatura" unit="m" step="0.01" placeholder="0.00" value={pacienteData.estatura} error={errors.estatura} onChange={handleChange} disabled={disabled} />
+                            <NumberWithUnit name="peso" label="Peso" unit="kg" step="0.1" placeholder="0.0" value={pacienteData.peso} error={errors.peso} onChange={handleChange} disabled={disabled} />
                         </div>
                         <div
                             className={`mt-4 flex items-center justify-between rounded-xl border px-4 py-3 text-sm ${imcInfo ? imcInfo.tone : 'border-slate-200 bg-slate-50 text-slate-600'}`}
