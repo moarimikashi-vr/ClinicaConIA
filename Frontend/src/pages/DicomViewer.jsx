@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import * as cornerstone from 'cornerstone-core';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import * as cornerstoneWADOImageLoader from 'cornerstone-wado-image-loader';
@@ -11,7 +11,7 @@ import { db } from '../firebaseConfig';
 import { doc, onSnapshot } from 'firebase/firestore';
 import {
     ArrowLeftIcon, ArrowPathIcon, ExclamationTriangleIcon, EyeIcon, EyeSlashIcon, HandRaisedIcon,
-    MagnifyingGlassIcon, MagnifyingGlassMinusIcon, MagnifyingGlassPlusIcon, PhotoIcon, SparklesIcon, TrashIcon,
+    MagnifyingGlassIcon, MagnifyingGlassMinusIcon, MagnifyingGlassPlusIcon, PhotoIcon, SparklesIcon, TrashIcon, ViewColumnsIcon,
 } from '@heroicons/react/24/outline';
 import {
     AngleIcon, EllipseRoiIcon, FlipHorizontalIcon, FlipVerticalIcon, InvertIcon, MagnifyIcon,
@@ -42,6 +42,7 @@ cornerstoneTools.external.cornerstoneMath = cornerstoneMath;
 cornerstoneTools.init();
 
 const IA_COLOR = '#facc15';
+const INFO_PANEL_KEY = 'ui.viewerInfoPanel';
 
 // Dibuja las regiones sugeridas por la IA sobre el canvas ya renderizado.
 // Las coordenadas vienen en píxeles de la imagen original; pixelToCanvas aplica zoom, pan, rotación y espejo.
@@ -96,6 +97,36 @@ const DicomViewer = () => {
     const [iaResultado, setIaResultado] = useState(null); // Entrada de caso.iaRegiones para este archivo
     const [showIA, setShowIA] = useState(true);
     const iaOverlayRef = useRef({ regiones: [], visible: true });
+    // Panel de información ocultable para dar más espacio a la imagen (preferencia guardada)
+    const [showInfo, setShowInfo] = useState(() => {
+        try {
+            return localStorage.getItem(INFO_PANEL_KEY) !== 'false';
+        } catch {
+            return true;
+        }
+    });
+    const toggleInfo = useCallback(() => {
+        setShowInfo((v) => {
+            try {
+                localStorage.setItem(INFO_PANEL_KEY, String(!v));
+            } catch {
+                // Sin almacenamiento la preferencia dura solo esta sesión
+            }
+            return !v;
+        });
+    }, []);
+
+    // Atajo "I" para mostrar u ocultar el panel, salvo mientras se escribe en un campo
+    useEffect(() => {
+        const onKeyDown = (e) => {
+            if (e.ctrlKey || e.metaKey || e.altKey || e.key.toLowerCase() !== 'i') return;
+            const tag = e.target?.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) return;
+            toggleInfo();
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [toggleInfo]);
 
     const [searchParams] = useSearchParams();
 
@@ -558,7 +589,7 @@ const DicomViewer = () => {
     const showToolbar = dicomFile && !loading && !error;
 
     return (
-        <div className="w-full h-screen bg-slate-950 text-slate-100 flex flex-col relative">
+        <div className="w-full h-full bg-slate-950 text-slate-100 flex flex-col relative">
             {/* Encabezado */}
             <header className="flex h-12 flex-shrink-0 items-center gap-3 border-b border-slate-800 bg-slate-900 px-3">
                 <button
@@ -575,6 +606,19 @@ const DicomViewer = () => {
                         {dicomFile.name}
                     </span>
                 )}
+                <button
+                    onClick={toggleInfo}
+                    aria-pressed={showInfo}
+                    aria-controls="viewer-info-panel"
+                    title={`${showInfo ? 'Ocultar' : 'Mostrar'} información (I)`}
+                    className={`ml-auto inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${showInfo
+                        ? 'border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white'
+                        : 'border-sky-500/60 bg-sky-600/15 text-sky-300'
+                        }`}
+                >
+                    <ViewColumnsIcon className="h-4 w-4" />
+                    {showInfo ? 'Ocultar información' : 'Mostrar información'}
+                </button>
             </header>
 
             {/* Barra de herramientas */}
@@ -698,7 +742,11 @@ const DicomViewer = () => {
                 </div>
 
                 {/* Panel lateral */}
-                <aside className="w-72 lg:w-80 flex-shrink-0 overflow-y-auto border-l border-slate-800 bg-slate-900 p-4 text-sm z-20 space-y-5">
+                {/* Oculto con display:none: el ResizeObserver del canvas reajusta la imagen sola */}
+                <aside
+                    id="viewer-info-panel"
+                    className={`${showInfo ? '' : 'hidden'} w-72 lg:w-80 flex-shrink-0 overflow-y-auto overscroll-contain border-l border-slate-800 bg-slate-900 p-4 text-sm z-20 space-y-5`}
+                >
                     {!dicomFile && !paciente && (
                         <p className="py-10 text-center text-slate-500">Esperando datos del estudio…</p>
                     )}
