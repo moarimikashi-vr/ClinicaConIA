@@ -265,3 +265,55 @@ def test_api_schema_and_docs_are_not_public(main):
     client = TestClient(main.app)
     assert client.get("/openapi.json").status_code == 404
     assert client.get("/docs").status_code == 404
+
+
+# --- Study preview for the PDF report ---------------------------------------------------
+
+class FakeBlob:
+    def __init__(self, data):
+        self.data, self.size = data, len(data)
+
+    def download_as_bytes(self):
+        return self.data
+
+
+class FakeBucket:
+    def __init__(self, files):
+        self.files = files
+
+    def get_blob(self, path):
+        data = self.files.get(path)
+        return FakeBlob(data) if data is not None else None
+
+
+def test_render_preview_limits_size_and_draws_regions(main):
+    img = np.full((1000, 2000, 3), 60, np.uint8)
+    jpeg = main.render_preview(img, [{"confianza": 0.4, "x0": 200, "y0": 100, "x1": 600, "y1": 500}], max_side=1000)
+    out = cv2.cvtColor(cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+    assert out.shape[:2] == (500, 1000)
+    # the box edge (scaled by 0.5) is drawn in amber: strong red and green, little blue
+    r, g, b = out[50, 200].astype(int)
+    assert r > 200 and g > 150 and b < 120
+    # pixels outside the box keep the original gray
+    assert abs(int(out[400, 900, 0]) - 60) < 15
+
+
+def test_preview_firebase_returns_a_jpeg(main, service_token, monkeypatch):
+    png = cv2.imencode(".png", np.full((300, 400), 90, np.uint8))[1].tobytes()
+    monkeypatch.setattr(main.storage, "bucket", lambda: FakeBucket({"casos/u1/123/a.png": png}))
+    r = TestClient(main.app).post(
+        "/preview_firebase", headers=TOKEN,
+        json={"path": "casos/u1/123/a.png", "regiones": [{"confianza": 0.9, "x0": 10, "y0": 10, "x1": 100, "y1": 80}]},
+    )
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/jpeg"
+    assert r.content[:3] == b"\xff\xd8\xff"
+
+
+def test_preview_firebase_is_protected_and_validates_input(main, service_token, monkeypatch):
+    monkeypatch.setattr(main.storage, "bucket", lambda: FakeBucket({}))
+    client = TestClient(main.app)
+    assert client.post("/preview_firebase", json={"path": "casos/u1/123/a.png"}).status_code == 401
+    assert client.post("/preview_firebase", headers=TOKEN, json={"path": "../x.png"}).status_code == 400
+    assert client.post("/preview_firebase", headers=TOKEN, json={"path": "casos/u1/123/a.png", "regiones": "x"}).status_code == 400
+    assert client.post("/preview_firebase", headers=TOKEN, json={"path": "casos/u1/123/missing.png"}).status_code == 404

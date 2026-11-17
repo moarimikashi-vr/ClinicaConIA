@@ -10,7 +10,7 @@ import pydicom
 import simplejpeg
 from PIL import Image
 from fastapi import FastAPI, File, UploadFile, HTTPException, Body, Depends, Header
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 import firebase_admin
 from firebase_admin import credentials, storage
 
@@ -73,7 +73,7 @@ def require_service_token(x_ia_token: str = Header(default='')):
         raise HTTPException(401, "No autorizado.")
 
 
-PROTECTED_PATHS = {"/predict_local", "/analyze_firebase"}
+PROTECTED_PATHS = {"/predict_local", "/analyze_firebase", "/preview_firebase"}
 
 
 @app.middleware("http")
@@ -360,15 +360,8 @@ def predict_local(file: UploadFile = File(...)):
         print(f"Error analizando imagen local: {e}")
         raise HTTPException(500, "No se pudo analizar la imagen.")
 
-# --- RUTA 2: Para tu sistema real (Conexión Firebase) ---
-@app.post("/analyze_firebase", dependencies=[Depends(require_service_token)])
-def analyze_firebase(payload: dict = Body(...)):
-    """
-    Recibe un JSON: { "path": "casos/<uid>/<nss>/<archivo>.dcm" }
-    Descarga el archivo de Firebase y lo analiza.
-    """
-    if MODEL is None: raise HTTPException(500, "Modelo no cargado.")
-
+def download_study(payload):
+    """Valida la ruta del estudio y lo descarga de Storage (compartido por análisis y vista previa)."""
     file_path = payload.get("path")
     if not isinstance(file_path, str) or not file_path:
         raise HTTPException(400, "Falta el campo 'path' en el JSON.")
@@ -389,9 +382,84 @@ def analyze_firebase(payload: dict = Body(...)):
         raise HTTPException(413, "El estudio supera el tamaño máximo de 50 MB.")
 
     try:
-        # Descargar a memoria RAM (sin guardar en disco) y analizar
-        image_bytes = blob.download_as_bytes()
+        # Descargar a memoria RAM (sin guardar en disco)
+        return file_path, blob.download_as_bytes()
+    except Exception as e:
+        print(f"Error Firebase: {e}")
+        raise HTTPException(502, "No se pudo descargar el estudio.")
+
+
+# --- RUTA 2: Para tu sistema real (Conexión Firebase) ---
+@app.post("/analyze_firebase", dependencies=[Depends(require_service_token)])
+def analyze_firebase(payload: dict = Body(...)):
+    """
+    Recibe un JSON: { "path": "casos/<uid>/<nss>/<archivo>.dcm" }
+    Descarga el archivo de Firebase y lo analiza.
+    """
+    if MODEL is None: raise HTTPException(500, "Modelo no cargado.")
+
+    file_path, image_bytes = download_study(payload)
+    try:
         return analizar(image_bytes, file_path)
     except Exception as e:
         print(f"Error Firebase/Procesamiento: {e}")
         raise HTTPException(422, "No se pudo procesar la imagen.")
+
+
+# Ámbar de la plataforma (#facc15), el mismo de los recuadros del visor
+PREVIEW_BOX_RGB = (250, 204, 21)
+
+
+def render_preview(img_rgb, regiones, max_side=1000, quality=85):
+    """JPEG de la radiografía, reducida a `max_side` px, con las zonas sugeridas por la IA.
+
+    Las coordenadas de `regiones` están en píxeles de la imagen original (las mismas que guarda
+    el backend en iaRegiones), así que se escalan con la imagen.
+    """
+    h, w = img_rgb.shape[:2]
+    scale = min(1.0, max_side / max(h, w))
+    if scale < 1.0:
+        img = cv2.resize(img_rgb, (int(round(w * scale)), int(round(h * scale))), interpolation=cv2.INTER_AREA)
+    else:
+        img = img_rgb.copy()
+    thickness = max(2, int(round(max(img.shape[:2]) / 300)))
+    for region in regiones:
+        x0, y0 = int(round(region["x0"] * scale)), int(round(region["y0"] * scale))
+        x1, y1 = int(round(region["x1"] * scale)), int(round(region["y1"] * scale))
+        cv2.rectangle(img, (x0, y0), (x1, y1), PREVIEW_BOX_RGB, thickness)
+        label = f"IA {round(float(region.get('confianza', 0)) * 100)} %"
+        font_scale = max(0.5, max(img.shape[:2]) / 1600)
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1)
+        ty = max(th + 6, y0 - 4)
+        cv2.rectangle(img, (x0, ty - th - 6), (x0 + tw + 8, ty + 2), (17, 24, 39), -1)
+        cv2.putText(img, label, (x0 + 4, ty - 2), cv2.FONT_HERSHEY_SIMPLEX, font_scale, PREVIEW_BOX_RGB, 1, cv2.LINE_AA)
+    ok, buf = cv2.imencode(".jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if not ok:
+        raise ValueError("No se pudo codificar la vista previa.")
+    return buf.tobytes()
+
+
+def _valid_regions(regiones):
+    if not isinstance(regiones, list) or len(regiones) > 50:
+        return False
+    keys = ("x0", "y0", "x1", "y1")
+    return all(isinstance(r, dict) and all(isinstance(r.get(k), (int, float)) for k in keys) for r in regiones)
+
+
+# --- RUTA 3: Vista previa del estudio para el reporte PDF ---
+@app.post("/preview_firebase", dependencies=[Depends(require_service_token)])
+def preview_firebase(payload: dict = Body(...)):
+    """
+    Recibe { "path": "casos/<uid>/<nss>/<archivo>", "regiones": [{x0, y0, x1, y1, confianza}] }
+    y devuelve un JPEG de la radiografía con las zonas dibujadas. No vuelve a correr los modelos.
+    """
+    regiones = payload.get("regiones", [])
+    if not _valid_regions(regiones):
+        raise HTTPException(400, "Regiones no válidas.")
+    file_path, image_bytes = download_study(payload)
+    try:
+        img_rgb, _ = decode_image(image_bytes, file_path)
+        return Response(content=render_preview(img_rgb, regiones), media_type="image/jpeg")
+    except Exception as e:
+        print(f"Error generando vista previa: {e}")
+        raise HTTPException(422, "No se pudo generar la vista previa.")
