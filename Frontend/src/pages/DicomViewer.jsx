@@ -9,6 +9,14 @@ import Hammer from 'hammerjs';
 import api from '../api/axiosConfig'; // Usar instancia configurada
 import { db } from '../firebaseConfig';
 import { doc, onSnapshot } from 'firebase/firestore';
+import {
+    ArrowLeftIcon, ArrowPathIcon, ExclamationTriangleIcon, EyeIcon, EyeSlashIcon, HandRaisedIcon,
+    MagnifyingGlassIcon, MagnifyingGlassMinusIcon, MagnifyingGlassPlusIcon, PhotoIcon, SparklesIcon, TrashIcon,
+} from '@heroicons/react/24/outline';
+import {
+    AngleIcon, EllipseRoiIcon, FlipHorizontalIcon, FlipVerticalIcon, InvertIcon, MagnifyIcon,
+    RectRoiIcon, RotateLeftIcon, RotateRightIcon, RulerIcon, WindowLevelIcon,
+} from '../components/viewer/ViewerIcons';
 
 // Configurar cornerstone
 cornerstoneWADOImageLoader.external.cornerstone = cornerstone;
@@ -99,14 +107,12 @@ const DicomViewer = () => {
             // Verificar si ya está habilitado antes de habilitar
             if (!cornerstone.getEnabledElement(element)) {
                 cornerstone.enable(element);
-                console.log('✅ Elemento habilitado');
             }
             setElementEnabled(true);
         } catch (error) {
             // Si hay error al verificar, intentar habilitar
             try {
                 cornerstone.enable(element);
-                console.log('✅ Elemento habilitado (segundo intento)');
                 setElementEnabled(true);
             } catch (e) {
                 console.error('Error al habilitar elemento:', e);
@@ -270,20 +276,15 @@ const DicomViewer = () => {
             const element = imageElementRef.current;
             const imageId = `wadouri:${url}`;
 
-            console.log('=== CARGANDO DICOM DESDE URL ===');
-            console.log('URL:', url);
-            console.log('Image ID:', imageId);
 
             // Cargar imagen
             const image = await cornerstone.loadImage(imageId);
-            console.log('✅ Imagen cargada:', image.width, 'x', image.height);
 
             // Mostrar imagen
             cornerstone.displayImage(element, image);
             cornerstone.fitToWindow(element); // Ajustar imagen al contenedor
             // CORRECCIÓN: Forzar un redimensionamiento para que el visor se ajuste al layout flexible
             cornerstone.resize(element);
-            console.log('✅ Imagen mostrada en pantalla');
 
             // Obtener metadatos (opcional, pero útil para el panel de info)
             const arrayBuffer = await (await fetch(url)).arrayBuffer();
@@ -314,7 +315,6 @@ const DicomViewer = () => {
             const vp = cornerstone.getViewport(element);
             setViewport(vp);
 
-            console.log('=== CARGA COMPLETADA ===');
         } catch (err) {
             console.error('Error al cargar DICOM desde URL:', err);
             setError(`Error: ${err.message}`);
@@ -358,18 +358,12 @@ const DicomViewer = () => {
             // Crear URL del archivo
             const imageId = cornerstoneWADOImageLoader.wadouri.fileManager.add(file);
 
-            console.log('=== CARGANDO DICOM LOCAL ===');
-            console.log('Archivo:', file.name);
-            console.log('Tamaño:', (file.size / 1024).toFixed(2), 'KB');
-            console.log('Image ID:', imageId);
 
             // Cargar imagen
             const image = await cornerstone.loadImage(imageId);
-            console.log('✅ Imagen cargada:', image.width, 'x', image.height);
 
             // Mostrar imagen
             cornerstone.displayImage(element, image);
-            console.log('✅ Imagen mostrada en pantalla');
 
             // CORRECCIÓN: Ajustar la imagen al tamaño del contenedor
             cornerstone.fitToWindow(element);
@@ -403,7 +397,6 @@ const DicomViewer = () => {
             const vp = cornerstone.getViewport(element);
             setViewport(vp);
 
-            console.log('=== CARGA COMPLETADA ===');
         } catch (err) {
             console.error('Error al cargar DICOM:', err);
             setError(`Error: ${err.message}`);
@@ -509,338 +502,312 @@ const DicomViewer = () => {
         }
     };
 
-    const toolButtons = [
-        { name: 'Wwwc', icon: '🖱️', label: 'W/L' },
-        { name: 'Zoom', icon: '🔍', label: 'Zoom' },
-        { name: 'Pan', icon: '✋', label: 'Pan' },
-        { name: 'Length', icon: '📏', label: 'Distancia' },
-        { name: 'Angle', icon: '📐', label: 'Ángulo' },
-        { name: 'RectangleRoi', icon: '▭', label: 'ROI Rect' },
-        { name: 'EllipticalRoi', icon: '⬭', label: 'ROI Elipse' },
-        { name: 'Magnify', icon: '🔬', label: 'Lupa' },
+    const toolGroups = [
+        {
+            label: 'Navegación',
+            tools: [
+                { name: 'Wwwc', Icon: WindowLevelIcon, label: 'Ventana / nivel' },
+                { name: 'Zoom', Icon: MagnifyingGlassIcon, label: 'Zoom' },
+                { name: 'Pan', Icon: HandRaisedIcon, label: 'Desplazar' },
+                { name: 'Magnify', Icon: MagnifyIcon, label: 'Lupa' },
+            ],
+        },
+        {
+            label: 'Medición',
+            tools: [
+                { name: 'Length', Icon: RulerIcon, label: 'Distancia' },
+                { name: 'Angle', Icon: AngleIcon, label: 'Ángulo' },
+                { name: 'RectangleRoi', Icon: RectRoiIcon, label: 'ROI rectangular' },
+                { name: 'EllipticalRoi', Icon: EllipseRoiIcon, label: 'ROI elíptica' },
+            ],
+        },
+    ];
+    const activeToolLabel = toolGroups.flatMap((g) => g.tools).find((t) => t.name === activeTool)?.label;
+
+    const imageActions = [
+        { key: 'zoom-in', Icon: MagnifyingGlassPlusIcon, label: 'Acercar', onClick: () => adjustZoom(1.2) },
+        { key: 'zoom-out', Icon: MagnifyingGlassMinusIcon, label: 'Alejar', onClick: () => adjustZoom(0.8) },
+        { key: 'rot-r', Icon: RotateRightIcon, label: 'Rotar 90° a la derecha', onClick: () => rotateImage(90) },
+        { key: 'rot-l', Icon: RotateLeftIcon, label: 'Rotar 90° a la izquierda', onClick: () => rotateImage(-90) },
+        { key: 'flip-h', Icon: FlipHorizontalIcon, label: 'Espejo horizontal', onClick: () => flipImage('h') },
+        { key: 'flip-v', Icon: FlipVerticalIcon, label: 'Espejo vertical', onClick: () => flipImage('v') },
+        { key: 'invert', Icon: InvertIcon, label: 'Invertir escala de grises', onClick: invertImage },
+        { key: 'reset', Icon: ArrowPathIcon, label: 'Restablecer vista', onClick: resetView },
     ];
 
+    const iconButton = 'inline-flex h-9 w-9 items-center justify-center rounded-md border transition-colors '
+        + 'focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500';
+    const idleButton = `${iconButton} border-transparent text-slate-300 hover:bg-slate-800 hover:text-white`;
+    const activeButton = `${iconButton} border-sky-500 bg-sky-600/20 text-sky-400`;
+    const divider = <span className="mx-1 h-6 w-px bg-slate-700" aria-hidden="true" />;
+    const sectionTitle = 'mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400';
+
+    const iaChip = {
+        'SANO': 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+        'FRACTURA DETECTADA': 'border-red-500/40 bg-red-500/10 text-red-300',
+    }[iaResultado?.prediction] || 'border-amber-500/40 bg-amber-500/10 text-amber-300';
+
+    const Row = ({ label, children }) => (
+        <div className="flex justify-between gap-3 py-1">
+            <dt className="text-slate-400">{label}</dt>
+            <dd className="text-right font-medium text-slate-100 truncate">{children}</dd>
+        </div>
+    );
+
+    const showToolbar = dicomFile && !loading && !error;
+
     return (
-        <div className="w-full h-screen bg-gray-900 flex flex-col relative">
-            {/* Header con botón de regreso */}
-            <div className="p-3 bg-gray-800 text-white shadow-lg flex justify-between items-start">
-                <div>
-                    <h1 className="text-2xl font-bold mb-2">Visor DICOM Profesional</h1>
-                    {dicomFile && (
-                        <span className="text-sm text-gray-400">Archivo: {dicomFile.name}</span>
-                    )}
-                </div>
+        <div className="w-full h-screen bg-slate-950 text-slate-100 flex flex-col relative">
+            {/* Encabezado */}
+            <header className="flex h-12 flex-shrink-0 items-center gap-3 border-b border-slate-800 bg-slate-900 px-3">
                 <button
                     onClick={() => navigate(-1)}
-                    className="px-4 py-2 bg-gray-600 rounded hover:bg-gray-500 font-semibold flex items-center gap-2"
+                    className="inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-slate-300 hover:bg-slate-800 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
                 >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                        <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
-                    </svg>
+                    <ArrowLeftIcon className="h-4 w-4" />
                     Regresar al caso
                 </button>
-            </div>
+                <span className="h-5 w-px bg-slate-700" aria-hidden="true" />
+                <h1 className="text-sm font-semibold tracking-wide">Visor DICOM</h1>
+                {dicomFile && (
+                    <span className="min-w-0 truncate text-xs text-slate-400" title={dicomFile.name}>
+                        {dicomFile.name}
+                    </span>
+                )}
+            </header>
 
-            {/* Toolbar de herramientas */}
-            {dicomFile && !loading && !error && (
-                <div className="p-2 bg-gray-800 border-t border-gray-700 flex flex-wrap gap-2">
-                    <div className="flex gap-1 border-r border-gray-600 pr-2">
-                        {toolButtons.map((tool) => (
+            {/* Barra de herramientas */}
+            {showToolbar && (
+                <div
+                    role="toolbar"
+                    aria-label="Herramientas del visor"
+                    className="flex flex-shrink-0 flex-wrap items-center gap-y-1 border-b border-slate-800 bg-slate-900 px-2 py-1"
+                >
+                    {toolGroups.map((group) => (
+                        <React.Fragment key={group.label}>
+                            <div className="flex items-center gap-0.5" role="group" aria-label={group.label}>
+                                {group.tools.map((tool) => (
+                                    <button
+                                        key={tool.name}
+                                        onClick={() => changeTool(tool.name)}
+                                        className={activeTool === tool.name ? activeButton : idleButton}
+                                        title={tool.label}
+                                        aria-label={tool.label}
+                                        aria-pressed={activeTool === tool.name}
+                                    >
+                                        <tool.Icon className="h-5 w-5" />
+                                    </button>
+                                ))}
+                            </div>
+                            {divider}
+                        </React.Fragment>
+                    ))}
+
+                    <div className="flex items-center gap-0.5" role="group" aria-label="Imagen">
+                        {imageActions.map((action) => (
                             <button
-                                key={tool.name}
-                                onClick={() => changeTool(tool.name)}
-                                className={`px-3 py-1 rounded text-sm ${activeTool === tool.name
-                                    ? 'bg-blue-600 text-white'
-                                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                                    }`}
-                                title={tool.label}
+                                key={action.key}
+                                onClick={action.onClick}
+                                className={idleButton}
+                                title={action.label}
+                                aria-label={action.label}
                             >
-                                {tool.icon}
+                                <action.Icon className="h-5 w-5" />
                             </button>
                         ))}
                     </div>
+                    {divider}
 
-                    <div className="flex gap-1 border-r border-gray-600 pr-2">
-                        <button
-                            onClick={resetView}
-                            className="px-3 py-1 bg-gray-700 text-white rounded hover:bg-gray-600 text-sm"
-                        >
-                            🔄 Reset
-                        </button>
-                        <button
-                            onClick={invertImage}
-                            className="px-3 py-1 bg-gray-700 text-white rounded hover:bg-gray-600 text-sm"
-                        >
-                            🎨 Invertir
-                        </button>
-                        <button
-                            onClick={() => adjustZoom(1.2)}
-                            className="px-3 py-1 bg-gray-700 text-white rounded hover:bg-gray-600 text-sm"
-                        >
-                            🔍+
-                        </button>
-                        <button
-                            onClick={() => adjustZoom(0.8)}
-                            className="px-3 py-1 bg-gray-700 text-white rounded hover:bg-gray-600 text-sm"
-                        >
-                            🔍-
-                        </button>
-                    </div>
-
-                    <div className="flex gap-1 border-r border-gray-600 pr-2">
-                        <button
-                            onClick={() => rotateImage(90)}
-                            className="px-3 py-1 bg-gray-700 text-white rounded hover:bg-gray-600 text-sm"
-                        >
-                            ↻ 90°
-                        </button>
-                        <button
-                            onClick={() => rotateImage(-90)}
-                            className="px-3 py-1 bg-gray-700 text-white rounded hover:bg-gray-600 text-sm"
-                        >
-                            ↺ 90°
-                        </button>
-                        <button
-                            onClick={() => flipImage('h')}
-                            className="px-3 py-1 bg-gray-700 text-white rounded hover:bg-gray-600 text-sm"
-                        >
-                            ⇆ Flip H
-                        </button>
-                        <button
-                            onClick={() => flipImage('v')}
-                            className="px-3 py-1 bg-gray-700 text-white rounded hover:bg-gray-600 text-sm"
-                        >
-                            ⇅ Flip V
-                        </button>
-                    </div>
-
-                    <div className="flex gap-1 border-r border-gray-600 pr-2">
-                        <select
-                            onChange={(e) => presetWindowLevel(e.target.value)}
-                            className="px-2 py-1 bg-gray-700 text-white rounded text-sm"
-                            defaultValue=""
-                        >
-                            <option value="">Presets W/L</option>
-                            <option value="soft-tissue">Tejido Blando</option>
-                            <option value="lung">Pulmón</option>
-                            <option value="bone">Hueso</option>
-                            <option value="brain">Cerebro</option>
-                            <option value="liver">Hígado</option>
-                            <option value="abdomen">Abdomen</option>
-                        </select>
-                    </div>
+                    <select
+                        onChange={(e) => presetWindowLevel(e.target.value)}
+                        className="h-9 rounded-md border border-slate-700 bg-slate-800 px-2 text-xs text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+                        defaultValue=""
+                        aria-label="Presets de ventana / nivel"
+                    >
+                        <option value="">Presets W/L</option>
+                        <option value="soft-tissue">Tejido blando</option>
+                        <option value="lung">Pulmón</option>
+                        <option value="bone">Hueso</option>
+                        <option value="brain">Cerebro</option>
+                        <option value="liver">Hígado</option>
+                        <option value="abdomen">Abdomen</option>
+                    </select>
+                    {divider}
 
                     <button
                         onClick={clearMeasurements}
-                        className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+                        className={idleButton}
+                        title="Limpiar mediciones"
+                        aria-label="Limpiar mediciones"
                     >
-                        🗑️ Limpiar Mediciones
+                        <TrashIcon className="h-5 w-5" />
                     </button>
 
                     {iaResultado?.regiones?.length > 0 && (
-                        <button
-                            onClick={() => setShowIA((v) => !v)}
-                            className={`px-3 py-1 rounded text-sm ${showIA
-                                ? 'bg-yellow-500 text-gray-900 hover:bg-yellow-400'
-                                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                                }`}
-                            title="Mostrar u ocultar las zonas sugeridas por la IA"
-                        >
-                            {showIA ? '🟨 Ocultar zonas IA' : '⬜ Mostrar zonas IA'}
-                        </button>
+                        <>
+                            {divider}
+                            <button
+                                onClick={() => setShowIA((v) => !v)}
+                                className={`inline-flex h-9 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 ${showIA
+                                    ? 'border-amber-400/60 bg-amber-400/10 text-amber-300'
+                                    : 'border-slate-700 text-slate-300 hover:bg-slate-800'
+                                    }`}
+                                title="Mostrar u ocultar las zonas sugeridas por la IA"
+                                aria-pressed={showIA}
+                            >
+                                {showIA ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                                Zonas IA
+                            </button>
+                        </>
                     )}
 
                     {viewport && (
-                        <div className="ml-auto text-xs text-gray-300 flex items-center gap-3">
-                            <span>W/L: {Math.round(viewport.voi.windowCenter)}/{Math.round(viewport.voi.windowWidth)}</span>
-                            <span>Zoom: {(viewport.scale * 100).toFixed(0)}%</span>
-                            <span>Rot: {viewport.rotation}°</span>
+                        <div className="ml-auto flex items-center gap-4 pl-3 font-mono text-[11px] tabular-nums text-slate-400">
+                            <span>W/L {Math.round(viewport.voi.windowCenter)} / {Math.round(viewport.voi.windowWidth)}</span>
+                            <span>Zoom {(viewport.scale * 100).toFixed(0)}%</span>
+                            <span>Rot {viewport.rotation}°</span>
                         </div>
                     )}
                 </div>
             )}
 
-            {/* Viewer - Layout Flexible */}
+            {/* Área de trabajo */}
             <div className="flex-1 flex flex-row overflow-hidden relative">
-                {/* Contenedor del Visor - Ocupa todo el espacio flexible */}
-                <div className="flex-1 relative bg-black">
+                <div className="flex-1 relative bg-black min-w-0">
                     <div
                         ref={imageElementRef}
                         className="w-full h-full"
-                        style={{
-                            cursor: activeTool === 'Pan' ? 'grab' : 'crosshair'
-                        }}
+                        style={{ cursor: activeTool === 'Pan' ? 'grab' : 'crosshair' }}
                     >
                     </div>
 
-                    {/* Indicadores superpuestos sobre el canvas */}
-                    {dicomFile && !loading && !error && (
-                        <div className="absolute top-4 left-4 flex flex-col gap-2">
-                            <div className="bg-black bg-opacity-60 text-white px-3 py-1 rounded-md text-xs border border-gray-700 backdrop-blur-sm">
-                                Herramienta: <span className="text-blue-400 font-bold">{toolButtons.find(t => t.name === activeTool)?.label}</span>
+                    {/* Leyendas sobre la imagen */}
+                    {showToolbar && (
+                        <>
+                            <div className="pointer-events-none absolute bottom-3 left-3 font-mono text-[11px] text-slate-300/90 [text-shadow:0_1px_2px_rgb(0_0_0)]">
+                                {activeToolLabel}
                             </div>
-                            {viewport && (
-                                <div className="bg-black bg-opacity-60 text-white px-3 py-1 rounded-md text-[10px] border border-gray-700 backdrop-blur-sm space-y-0.5">
-                                    <p>Zoom: {(viewport.scale * 100).toFixed(0)}%</p>
-                                    <p>W/L: {Math.round(viewport.voi.windowCenter)} / {Math.round(viewport.voi.windowWidth)}</p>
+                            {dicomInfo && (
+                                <div className="pointer-events-none absolute bottom-3 right-3 text-right font-mono text-[11px] tabular-nums text-slate-300/90 [text-shadow:0_1px_2px_rgb(0_0_0)]">
+                                    {dicomInfo.width} × {dicomInfo.height} px
                                 </div>
                             )}
-                        </div>
+                        </>
                     )}
                 </div>
 
-                {/* Panel de información lateral - Estructuralmente persistente */}
-                <div className="w-72 md:w-80 lg:w-96 bg-gray-900 text-white p-5 overflow-y-auto flex-shrink-0 border-l border-gray-700 shadow-2xl z-20">
-                    {/* Mensaje de espera si no hay archivo aún */}
+                {/* Panel lateral */}
+                <aside className="w-72 lg:w-80 flex-shrink-0 overflow-y-auto border-l border-slate-800 bg-slate-900 p-4 text-sm z-20 space-y-5">
                     {!dicomFile && !paciente && (
-                        <div className="flex flex-col items-center justify-center h-full text-center text-gray-500">
-                            <p className="text-sm">Esperando datos del estudio...</p>
-                        </div>
+                        <p className="py-10 text-center text-slate-500">Esperando datos del estudio…</p>
                     )}
-                    {/* --- SECCIÓN DE INFORMACIÓN DEL PACIENTE (DESDE LA BD) --- */}
-                    {paciente ? (
-                        <>
-                            <h2 className="text-lg font-bold mb-3 border-b border-gray-700 pb-2">
-                                Información del Paciente
-                            </h2>
-                            <div className="space-y-2 text-sm mb-4">
-                                <p><strong>Nombre:</strong> {`${paciente.nombre} ${paciente.apellidoP}`}</p>
-                                <p><strong>NSS:</strong> {paciente.nss}</p>
-                                <p><strong>Edad:</strong> {paciente.edad} años</p>
-                                <p><strong>IMC:</strong> {paciente.imc}</p>
-                                <p><strong>Diabetes:</strong> {paciente.diabetes ? 'Sí' : 'No'}</p>
-                                <p><strong>Hipertensión:</strong> {paciente.hipertension ? 'Sí' : 'No'}</p>
-                                <Link to={`/app/alta-paciente/${paciente.nss}`} className="text-blue-400 hover:underline text-xs">
-                                    Ver expediente completo &rarr;
+
+                    <section>
+                        <h2 className={sectionTitle}>Paciente</h2>
+                        {paciente ? (
+                            <>
+                                <dl>
+                                    <Row label="Nombre">{`${paciente.nombre} ${paciente.apellidoP}`}</Row>
+                                    <Row label="NSS">{paciente.nss}</Row>
+                                    <Row label="Edad">{paciente.edad} años</Row>
+                                    <Row label="IMC">{paciente.imc}</Row>
+                                    <Row label="Diabetes">{paciente.diabetes ? 'Sí' : 'No'}</Row>
+                                    <Row label="Hipertensión">{paciente.hipertension ? 'Sí' : 'No'}</Row>
+                                </dl>
+                                <Link to={`/app/alta-paciente/${paciente.nss}`} className="mt-1 inline-block text-xs text-sky-400 hover:underline">
+                                    Ver expediente completo →
                                 </Link>
-                            </div>
-                        </>
-                    ) : (
-                        <p className="text-sm text-yellow-400">Cargando información del paciente...</p>
-                    )}
+                            </>
+                        ) : (
+                            <p className="text-slate-500">Cargando información del paciente…</p>
+                        )}
+                    </section>
 
-                    {/* --- SECCIÓN DE DETALLES TÉCNICOS (DEL ARCHIVO DICOM) --- */}
-                    {dicomInfo && (
-                        <>
-                            <h2 className="text-lg font-bold mb-3 border-b border-gray-700 pb-2">
-                                Detalles del Estudio
-                            </h2>
-                            <div className="space-y-3 text-sm">
-                                <div>
-                                    <p className="text-gray-400 text-xs uppercase">Archivo</p>
-                                    <p className="font-semibold truncate text-sm" title={dicomInfo.fileName}>
-                                        {dicomInfo.fileName}
-                                    </p>
-                                    <p className="text-xs text-gray-400">
-                                        {(dicomInfo.fileSize / 1024).toFixed(2)} KB
-                                    </p>
-                                </div>
-                                <div>
-                                    <p className="text-gray-400 text-xs uppercase">Fecha de Estudio</p>
-                                    <p className="font-semibold text-sm">{dicomInfo.studyDate}</p>
-                                </div>
-                                <div>
-                                    <p className="text-gray-400 text-xs uppercase">Modalidad</p>
-                                    <p className="font-semibold text-blue-400 text-sm">{dicomInfo.modality}</p>
-                                </div>
-                                {dicomInfo.manufacturer !== 'N/A' && (
-                                    <div>
-                                        <p className="text-gray-400 text-xs uppercase">Fabricante</p>
-                                        <p className="text-xs">{dicomInfo.manufacturer}</p>
-                                    </div>
-                                )}
-                                <hr className="border-gray-700 my-2" />
-                                <div>
-                                    <p className="text-gray-400 text-xs uppercase">Dimensiones</p>
-                                    <p className="font-semibold text-sm">{dicomInfo.width} × {dicomInfo.height}</p>
-                                </div>
-                                {dicomInfo.pixelSpacing !== 'N/A' && (
-                                    <div>
-                                        <p className="text-gray-400 text-xs uppercase">Espaciado de Píxeles</p>
-                                        <p className="text-xs">{dicomInfo.pixelSpacing}</p>
-                                    </div>
-                                )}
-                                {dicomInfo.sliceThickness !== 'N/A' && (
-                                    <div>
-                                        <p className="text-gray-400 text-xs uppercase">Grosor de Corte</p>
-                                        <p className="text-xs">{dicomInfo.sliceThickness} mm</p>
-                                    </div>
-                                )}
-                            </div>
-                        </>
-                    )}
-
-                    {/* --- SECCIÓN DEL ASISTENTE IA --- */}
                     {iaResultado && (
-                        <>
-                            <hr className="border-gray-700 my-3" />
-                            <h2 className="text-lg font-bold mb-2 border-b border-gray-700 pb-2">
+                        <section className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+                            <h2 className={`${sectionTitle} flex items-center gap-1.5`}>
+                                <SparklesIcon className="h-4 w-4 text-amber-300" />
                                 Asistente IA
                             </h2>
-                            <div className="space-y-1 text-sm">
-                                <p><strong>Predicción:</strong> {iaResultado.prediction}</p>
-                                <p><strong>Confianza de fractura:</strong> {iaResultado.confidence_fracture}%</p>
-                                <p><strong>Zonas sugeridas:</strong> {iaResultado.regiones?.length || 0}</p>
-                                <p className="text-xs text-gray-400">Modelo {iaResultado.modelo}</p>
-                                <p className="text-xs text-yellow-300 mt-2">
-                                    Los recuadros indican dónde mirar; no confirman una fractura, y su ausencia no la descarta.
-                                </p>
-                            </div>
-                        </>
+                            <span className={`inline-block rounded border px-2 py-0.5 text-xs font-semibold ${iaChip}`}>
+                                {iaResultado.prediction}
+                            </span>
+                            <dl className="mt-2">
+                                <Row label="Confianza de fractura">{iaResultado.confidence_fracture}%</Row>
+                                <Row label="Zonas sugeridas">{iaResultado.regiones?.length || 0}</Row>
+                                <Row label="Modelo">{iaResultado.modelo}</Row>
+                            </dl>
+                            <p className="mt-2 text-xs leading-snug text-slate-400">
+                                Los recuadros indican dónde mirar; no confirman una fractura, y su ausencia no la descarta.
+                            </p>
+                        </section>
                     )}
 
-                    {/* --- SECCIÓN DEL VIEWPORT (SE MANTIENE IGUAL) --- */}
-                    {viewport && (
-                        <>
-                            <hr className="border-gray-700 my-3" />
-                            <div>
-                                <p className="text-gray-400 text-xs uppercase">Viewport Actual</p>
-                                <div className="grid grid-cols-2 gap-2 text-xs mt-1">
-                                    <div><span className="text-gray-400">Center:</span><span className="ml-1 font-mono">{Math.round(viewport.voi.windowCenter)}</span></div>
-                                    <div><span className="text-gray-400">Width:</span><span className="ml-1 font-mono">{Math.round(viewport.voi.windowWidth)}</span></div>
-                                    <div><span className="text-gray-400">Zoom:</span><span className="ml-1 font-mono">{(viewport.scale * 100).toFixed(0)}%</span></div>
-                                    <div><span className="text-gray-400">Rotación:</span><span className="ml-1 font-mono">{viewport.rotation}°</span></div>
-                                    <div className="col-span-2"><span className="text-gray-400">Invertido:</span><span className="ml-1">{viewport.invert ? '✓ Sí' : '✗ No'}</span></div>
-                                </div>
-                            </div>
-                        </>
+                    {dicomInfo && (
+                        <section>
+                            <h2 className={sectionTitle}>Estudio</h2>
+                            <dl>
+                                <Row label="Archivo"><span title={dicomInfo.fileName}>{dicomInfo.fileName}</span></Row>
+                                <Row label="Tamaño">{(dicomInfo.fileSize / 1024).toFixed(2)} KB</Row>
+                                <Row label="Fecha de estudio">{dicomInfo.studyDate}</Row>
+                                <Row label="Modalidad">{dicomInfo.modality}</Row>
+                                {dicomInfo.manufacturer !== 'N/A' && <Row label="Fabricante">{dicomInfo.manufacturer}</Row>}
+                                <Row label="Dimensiones">{dicomInfo.width} × {dicomInfo.height}</Row>
+                                {dicomInfo.pixelSpacing !== 'N/A' && <Row label="Espaciado de píxeles">{dicomInfo.pixelSpacing}</Row>}
+                                {dicomInfo.sliceThickness !== 'N/A' && <Row label="Grosor de corte">{dicomInfo.sliceThickness} mm</Row>}
+                            </dl>
+                        </section>
                     )}
-                </div>
+
+                    {viewport && (
+                        <section>
+                            <h2 className={sectionTitle}>Viewport</h2>
+                            <dl className="font-mono text-xs tabular-nums">
+                                <Row label="Centro">{Math.round(viewport.voi.windowCenter)}</Row>
+                                <Row label="Ancho">{Math.round(viewport.voi.windowWidth)}</Row>
+                                <Row label="Zoom">{(viewport.scale * 100).toFixed(0)}%</Row>
+                                <Row label="Rotación">{viewport.rotation}°</Row>
+                                <Row label="Invertido">{viewport.invert ? 'Sí' : 'No'}</Row>
+                            </dl>
+                        </section>
+                    )}
+                </aside>
             </div>
 
-            {/* Estado inicial - superpuesto sobre el viewer */}
+            {/* Estado inicial */}
             {!dicomFile && !loading && (
-                <div className="absolute inset-0 flex items-center justify-center bg-gray-900 z-30">
-                    <div className="text-center text-gray-400">
-                        <div className="text-4xl mb-4">🖼️</div>
-                        <h2 className="text-xl font-bold text-white">Visor de Estudios</h2>
-                        <p>La imagen del estudio se cargará en este espacio.</p>
+                <div className="absolute inset-0 flex items-center justify-center bg-slate-950 z-30">
+                    <div className="text-center text-slate-400">
+                        <PhotoIcon className="mx-auto mb-3 h-10 w-10 text-slate-600" />
+                        <h2 className="text-base font-semibold text-slate-200">Visor de estudios</h2>
+                        <p className="text-sm">La imagen del estudio se cargará en este espacio.</p>
                     </div>
                 </div>
             )}
 
-            {/* Loading - superpuesto sobre el viewer */}
+            {/* Cargando */}
             {loading && (
-                <div className="absolute inset-0 flex items-center justify-center bg-gray-900 bg-opacity-90 z-40">
-                    <div className="text-center text-white">
-                        <div className="inline-block animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-500 mb-4"></div>
-                        <p className="text-lg">Cargando imagen DICOM...</p>
+                <div className="absolute inset-0 flex items-center justify-center bg-slate-950/90 z-40">
+                    <div className="text-center text-slate-300">
+                        <div className="mx-auto mb-3 h-10 w-10 animate-spin rounded-full border-2 border-slate-700 border-t-sky-500"></div>
+                        <p className="text-sm">Cargando imagen DICOM…</p>
                     </div>
                 </div>
             )}
 
-            {/* Error - superpuesto sobre el viewer */}
+            {/* Error */}
             {error && (
-                <div className="absolute inset-0 flex items-center justify-center p-4 bg-gray-900 bg-opacity-90 z-40">
-                    <div className="bg-red-100 border border-red-400 text-red-700 px-6 py-4 rounded max-w-lg text-center">
-                        <p className="font-bold mb-2">Error al cargar el archivo</p>
-                        <p>{error}</p>
+                <div className="absolute inset-0 flex items-center justify-center p-4 bg-slate-950/90 z-40">
+                    <div className="max-w-md rounded-lg border border-red-500/40 bg-slate-900 px-6 py-5 text-center">
+                        <ExclamationTriangleIcon className="mx-auto mb-2 h-8 w-8 text-red-400" />
+                        <p className="mb-1 font-semibold text-slate-100">Error al cargar el archivo</p>
+                        <p className="text-sm text-slate-300">{error}</p>
                         <button
                             onClick={() => {
                                 setError(null);
                                 setDicomFile(null);
                             }}
-                            className="mt-4 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+                            className="mt-4 rounded-md border border-slate-600 px-4 py-2 text-sm text-slate-100 hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
                         >
                             Intentar de nuevo
                         </button>
