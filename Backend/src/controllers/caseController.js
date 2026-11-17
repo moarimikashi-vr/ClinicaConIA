@@ -16,6 +16,10 @@ const {
 } = require('../security/policies');
 
 const MAX_TEXT = 10000;
+// Bucket del proyecto: las URLs de descarga deben apuntar a él (mismo valor que config/firebase.js)
+const STORAGE_BUCKET = process.env.FIREBASE_STORAGE_BUCKET || 'radiodiagnosticoapp.firebasestorage.app';
+// El NSS forma parte de la ruta en Storage: solo caracteres que el servicio de IA acepta
+const STORAGE_NSS_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 // Carga un caso y verifica que el usuario participe en él (o sea administrador)
 const loadAccessibleCase = async (req, res) => {
@@ -49,7 +53,7 @@ const archivoSchema = z.object({
     // La URL de descarga debe apuntar al mismo objeto que uploadPath (formato de getDownloadURL)
     (a) => {
         try {
-            return new URL(a.url).pathname.endsWith(`/o/${encodeURIComponent(a.uploadPath)}`);
+            return new URL(a.url).pathname === `/v0/b/${STORAGE_BUCKET}/o/${encodeURIComponent(a.uploadPath)}`;
         } catch {
             return false;
         }
@@ -150,6 +154,9 @@ const createCase = async (req, res) => {
             db.collection('pacientes').doc(pacienteNSS).get(),
             db.collection('users').doc(medicoEspecialistaId).get(),
         ]);
+        if (!STORAGE_NSS_PATTERN.test(pacienteNSS) || pacienteNSS === '.' || pacienteNSS === '..') {
+            return res.status(400).json({ message: 'El NSS del paciente tiene caracteres que no se pueden usar en los estudios. Corrige el registro del paciente.' });
+        }
         if (!pacienteDoc.exists) {
             return res.status(400).json({ message: 'El paciente no existe.' });
         }

@@ -16,8 +16,14 @@ const verifyToken = async (req, res, next) => {
     try {
         // checkRevoked: una sesión revocada (cuenta deshabilitada, contraseña cambiada) deja de servir de inmediato
         decodedToken = await admin.auth().verifyIdToken(idToken, true);
-    } catch {
-        return res.status(401).json({ message: 'La sesión no es válida o expiró. Inicia sesión de nuevo.' });
+    } catch (error) {
+        // Token inválido, expirado o revocado: el usuario debe iniciar sesión de nuevo.
+        // Cualquier otro error (red, cuota, Firebase caído) no es culpa de la sesión: 503.
+        if (typeof error?.code === 'string' && error.code.startsWith('auth/')) {
+            return res.status(401).json({ message: 'La sesión no es válida o expiró. Inicia sesión de nuevo.' });
+        }
+        console.error('Error verifying token:', error);
+        return res.status(503).json({ message: 'No se pudo verificar la sesión en este momento. Inténtalo de nuevo.' });
     }
 
     try {

@@ -18,9 +18,11 @@ const sanitizePatient = (body) => {
         if (value === undefined || value === null) continue;
         if (type === 'string') out[field] = String(value).trim().slice(0, MAX_TEXT);
         else if (type === 'number') {
+            // Un campo numérico vacío no se guarda como 0
+            if (value === '') continue;
             const n = Number(value);
             if (Number.isFinite(n)) out[field] = n;
-        } else out[field] = Boolean(value);
+        } else out[field] = value === true || value === 'true';
     }
     return out;
 };

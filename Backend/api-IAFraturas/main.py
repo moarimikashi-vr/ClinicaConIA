@@ -62,7 +62,7 @@ if not IA_SERVICE_TOKEN:
 
 MAX_FILE_BYTES = 50 * 1024 * 1024  # 50 MB por estudio
 # Solo estudios subidos por la plataforma: casos/<uid>/<nss>/<archivo>
-STORAGE_PATH_PATTERN = re.compile(r'^casos/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+/[A-Za-z0-9._-]+$')
+STORAGE_PATH_PATTERN = re.compile(r'^casos/[A-Za-z0-9_-]+/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$')
 
 
 def require_service_token(x_ia_token: str = Header(default='')):

@@ -1,5 +1,6 @@
 // Authorization tests for the API against an in-memory Firebase (no network, no real project).
 // Run: npm test (node --test)
+const http = require('node:http');
 const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -209,7 +210,7 @@ const nuevoCaso = (over = {}) => ({
     pacienteNSS: '222',
     motivoConsulta: 'golpe',
     medicoEspecialistaId: 'med2',
-    archivos: [{ nombre: 'Luis_Paz-222.dcm', url: 'https://firebasestorage.googleapis.com/v0/b/x/o/casos%2Faten1%2F222%2FLuis_Paz-222.dcm?alt=media&token=t', size: 10, type: '', uploadPath: 'casos/aten1/222/Luis_Paz-222.dcm' }],
+    archivos: [{ nombre: 'Luis_Paz-222.dcm', url: 'https://firebasestorage.googleapis.com/v0/b/radiodiagnosticoapp.firebasestorage.app/o/casos%2Faten1%2F222%2FLuis_Paz-222.dcm?alt=media&token=t', size: 10, type: '', uploadPath: 'casos/aten1/222/Luis_Paz-222.dcm' }],
     ...over,
 });
 
@@ -240,7 +241,7 @@ test('case creation rejects bad roles, specialists, patients and storage paths',
     const traversal = nuevoCaso({ archivos: [{ ...nuevoCaso().archivos[0], uploadPath: 'casos/aten1/222/../../x.dcm' }] });
     assert.equal((await call('POST', '/casos', { token: T.atencion, body: traversal })).status, 400);
     // The download URL must point to the same object as uploadPath
-    const mismatchedUrl = nuevoCaso({ archivos: [{ ...nuevoCaso().archivos[0], url: 'https://firebasestorage.googleapis.com/v0/b/x/o/casos%2Faten2%2F222%2Fotro.dcm?alt=media' }] });
+    const mismatchedUrl = nuevoCaso({ archivos: [{ ...nuevoCaso().archivos[0], url: 'https://firebasestorage.googleapis.com/v0/b/radiodiagnosticoapp.firebasestorage.app/o/casos%2Faten2%2F222%2Fotro.dcm?alt=media' }] });
     assert.equal((await call('POST', '/casos', { token: T.atencion, body: mismatchedUrl })).status, 400);
     assert.equal(count(), start);
 });
@@ -254,10 +255,75 @@ test('closing and deleting keep their previous permissions', async () => {
     assert.equal(fake.db.read('casos/c1'), undefined);
 });
 
-test('error responses do not leak internal messages', async () => {
-    fake.db.put('casos/broken', { medicoGeneralId: 'aten1', medicoEspecialistaId: 'med1', estado: 'abierto' });
+test('error responses do not leak internal messages (404 and 500)', async () => {
     const r = await call('GET', '/casos/does-not-exist', { token: T.admin });
     assert.equal(r.status, 404);
     assert.equal(r.body.details, undefined);
     assert.equal(r.body.stack, undefined);
+
+    fake.db.failReads('casos');
+    const boom = await call('GET', '/casos/c1', { token: T.admin });
+    assert.equal(boom.status, 500);
+    assert.ok(!JSON.stringify(boom.body).includes('DEADLINE_EXCEEDED'));
+    assert.equal(boom.body.stack, undefined);
+});
+
+test('file URLs must point to the project bucket', async () => {
+    const base = nuevoCaso().archivos[0];
+    const otherBucket = nuevoCaso({ archivos: [{ ...base, url: base.url.replace('radiodiagnosticoapp.firebasestorage.app', 'attacker-bucket.appspot.com') }] });
+    assert.equal((await call('POST', '/casos', { token: T.atencion, body: otherBucket })).status, 400);
+});
+
+test('a revoked session is 401 but a Firebase outage is 503', async () => {
+    fake.tokenError('tok-revoked', Object.assign(new Error('revoked'), { code: 'auth/id-token-revoked' }));
+    fake.tokenError('tok-outage', Object.assign(new Error('socket hang up'), { code: 'app/network-error' }));
+    assert.equal((await call('GET', '/casos', { token: 'tok-revoked' })).status, 401);
+    const outage = await call('GET', '/casos', { token: 'tok-outage' });
+    assert.equal(outage.status, 503);
+    assert.ok(!JSON.stringify(outage.body).includes('socket hang up'));
+});
+
+test('patient save keeps empty numbers out and parses boolean strings', async () => {
+    const r = await call('POST', '/pacientes', { token: T.atencion, body: { nss: '444', nombre: 'Leo', peso: '', edad: '41', diabetes: 'false', hipertension: 'true' } });
+    assert.equal(r.status, 200);
+    const saved = fake.db.read('pacientes/444');
+    assert.equal(saved.peso, undefined);
+    assert.equal(saved.edad, 41);
+    assert.equal(saved.diabetes, false);
+    assert.equal(saved.hipertension, true);
+});
+
+test('a patient whose NSS cannot be used in storage paths gets a clear 400 on case creation', async () => {
+    fake.db.put('pacientes/12 34', { nss: '12 34', nombre: 'Old', apellidoP: 'Record' });
+    const r = await call('POST', '/casos', { token: T.atencion, body: nuevoCaso({ pacienteNSS: '12 34', archivos: [] }) });
+    assert.equal(r.status, 400);
+    assert.match(r.body.message, /NSS/);
+});
+
+test('the backend calls the IA service with the shared token and the study path', async () => {
+    const received = [];
+    const ia = http.createServer((req, res) => {
+        let raw = '';
+        req.on('data', (c) => { raw += c; });
+        req.on('end', () => {
+            received.push({ url: req.url, token: req.headers['x-ia-token'], body: JSON.parse(raw) });
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ prediction: 'SANO', status: 'SUCCESS', confidence_fracture: 5, analysis_note: 'ok', regiones: [], model_version: 'v3+yolo' }));
+        });
+    });
+    await new Promise((r) => ia.listen(0, '127.0.0.1', r));
+    const previous = process.env.IA_SERVICE_URL;
+    process.env.IA_SERVICE_URL = `http://127.0.0.1:${ia.address().port}`;
+    try {
+        const r = await call('POST', '/casos', { token: T.atencion, body: nuevoCaso() });
+        assert.equal(r.status, 201);
+        for (let i = 0; i < 50 && !fake.db.read(`casos/${r.body.id}`).iaRegiones; i++) {
+            await new Promise((done) => setTimeout(done, 20));
+        }
+        assert.deepEqual(received.map((x) => [x.url, x.token, x.body.path]), [['/analyze_firebase', 'test-token', 'casos/aten1/222/Luis_Paz-222.dcm']]);
+        assert.equal(fake.db.read(`casos/${r.body.id}`).iaRegiones.length, 1);
+    } finally {
+        process.env.IA_SERVICE_URL = previous;
+        ia.close();
+    }
 });

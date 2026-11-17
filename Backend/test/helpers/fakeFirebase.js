@@ -25,6 +25,10 @@ const applyUpdate = (current, updates) => {
 
 const createDb = () => {
     const store = new Map(); // path -> data
+    const failing = new Set(); // collection names whose reads throw (simulated outage)
+    const maybeFail = (collPath) => {
+        if (failing.has(collPath.split('/')[0])) throw new Error('internal firestore detail: DEADLINE_EXCEEDED');
+    };
 
     const docRef = (collPath, id) => {
         const full = `${collPath}/${id}`;
@@ -32,6 +36,7 @@ const createDb = () => {
             id,
             path: full,
             async get() {
+                maybeFail(collPath);
                 const data = store.get(full);
                 return { id, exists: data !== undefined, data: () => clone(data), ref: docRef(collPath, id) };
             },
@@ -53,6 +58,7 @@ const createDb = () => {
         limit: (n) => query(collPath, filters, order, n),
         select: () => query(collPath, filters, order, max),
         async get() {
+            maybeFail(collPath);
             const prefix = `${collPath}/`;
             let docs = [...store.entries()]
                 .filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/'))
@@ -95,13 +101,15 @@ const createDb = () => {
         // test helpers
         put(p, data) { store.set(p, clone(data)); },
         read(p) { return clone(store.get(p)); },
-        reset() { store.clear(); },
+        reset() { store.clear(); failing.clear(); },
+        failReads(name) { failing.add(name); },
     };
 };
 
 const install = () => {
     const db = createDb();
     const tokens = new Map(); // token -> uid
+    const tokenErrors = new Map(); // token -> error thrown by verifyIdToken
     const createdUsers = [];
     const deletedFiles = [];
     const sentMail = [];
@@ -109,7 +117,8 @@ const install = () => {
     const admin = {
         auth: () => ({
             async verifyIdToken(token) {
-                if (!tokens.has(token)) throw new Error('invalid token');
+                if (tokenErrors.has(token)) throw tokenErrors.get(token);
+                if (!tokens.has(token)) throw Object.assign(new Error('invalid token'), { code: 'auth/argument-error' });
                 return { uid: tokens.get(token) };
             },
             async createUser(data) {
@@ -140,9 +149,12 @@ const install = () => {
             if (rol) db.put(`users/${uid}`, { nombre: `N_${uid}`, apellido: `A_${uid}`, email: `${uid}@test.local`, rol, ...extra });
             return `tok-${uid}`;
         },
+        // Makes verifyIdToken throw for this token (e.g. revoked session or Firebase outage)
+        tokenError(token, error) { tokenErrors.set(token, error); },
         reset() {
             db.reset();
             tokens.clear();
+            tokenErrors.clear();
             createdUsers.length = 0;
             deletedFiles.length = 0;
             sentMail.length = 0;
