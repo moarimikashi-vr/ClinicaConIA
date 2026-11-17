@@ -234,6 +234,7 @@ def test_analysis_is_refused_when_no_token_is_configured(main, fakes, monkeypatc
 
 @pytest.mark.parametrize("path", [
     "pacientes/u1/123/a.dcm", "casos/u1/123/../../secret.dcm", "casos/u1/123/sub/a.dcm", "casos/u1/a.dcm", "", 123,
+    "casos/u1/123/a.dcm" + chr(10),  # trailing newline
 ])
 def test_analyze_firebase_only_accepts_study_paths(main, fakes, service_token, path):
     fakes(FakeClassifier(0.1))
@@ -251,3 +252,16 @@ def test_predict_local_rejects_files_over_the_size_limit(main, fakes, service_to
 def test_no_wildcard_cors_headers(main):
     r = TestClient(main.app).get("/", headers={"Origin": "https://evil.example"})
     assert "access-control-allow-origin" not in r.headers
+
+
+def test_token_is_checked_before_the_body_is_parsed(main, service_token):
+    client = TestClient(main.app)
+    r = client.post("/analyze_firebase", content=b"{not json", headers={"Content-Type": "application/json"})
+    assert r.status_code == 401
+    assert "detail" not in r.text or "json" not in r.text.lower()
+
+
+def test_api_schema_and_docs_are_not_public(main):
+    client = TestClient(main.app)
+    assert client.get("/openapi.json").status_code == 404
+    assert client.get("/docs").status_code == 404

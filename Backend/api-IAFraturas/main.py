@@ -10,6 +10,7 @@ import pydicom
 import simplejpeg
 from PIL import Image
 from fastapi import FastAPI, File, UploadFile, HTTPException, Body, Depends, Header
+from fastapi.responses import JSONResponse
 import firebase_admin
 from firebase_admin import credentials, storage
 
@@ -48,7 +49,8 @@ IMG_SIZE = (448, 448)
 # ==========================================
 # 🚀 INICIALIZACIÓN
 # ==========================================
-app = FastAPI(title="API de Radiodiagnóstico (Soporte DICOM)")
+# Sin /docs ni /openapi.json públicos: el servicio solo lo usa el backend
+app = FastAPI(title="API de Radiodiagnóstico (Soporte DICOM)", docs_url=None, redoc_url=None, openapi_url=None)
 
 # 1. Sin CORS: este servicio solo lo llama el backend (servidor a servidor), nunca un navegador.
 
@@ -56,7 +58,7 @@ app = FastAPI(title="API de Radiodiagnóstico (Soporte DICOM)")
 # Sin secreto configurado el servicio rechaza los análisis (falla cerrado).
 IA_SERVICE_TOKEN = os.environ.get('IA_SERVICE_TOKEN', '')
 if not IA_SERVICE_TOKEN:
-    print("⚠️ IA_SERVICE_TOKEN no está configurado: los endpoints de análisis responderán 503.")
+    print("[AVISO] IA_SERVICE_TOKEN no esta configurado: los endpoints de analisis responderan 503.")
 
 MAX_FILE_BYTES = 50 * 1024 * 1024  # 50 MB por estudio
 # Solo estudios subidos por la plataforma: casos/<uid>/<nss>/<archivo>
@@ -69,6 +71,21 @@ def require_service_token(x_ia_token: str = Header(default='')):
         raise HTTPException(503, "Servicio de análisis sin configurar.")
     if not hmac.compare_digest(x_ia_token.encode(), IA_SERVICE_TOKEN.encode()):
         raise HTTPException(401, "No autorizado.")
+
+
+PROTECTED_PATHS = {"/predict_local", "/analyze_firebase"}
+
+
+@app.middleware("http")
+async def check_service_token_first(request, call_next):
+    """Valida el secreto antes de leer el cuerpo: sin token no se parsea JSON ni se acepta una subida."""
+    if request.url.path in PROTECTED_PATHS:
+        if not IA_SERVICE_TOKEN:
+            return JSONResponse(status_code=503, content={"detail": "Servicio de análisis sin configurar."})
+        token = request.headers.get("x-ia-token", "")
+        if not hmac.compare_digest(token.encode(), IA_SERVICE_TOKEN.encode()):
+            return JSONResponse(status_code=401, content={"detail": "No autorizado."})
+    return await call_next(request)
 
 
 # 2. Conectar a Firebase
@@ -355,7 +372,7 @@ def analyze_firebase(payload: dict = Body(...)):
     file_path = payload.get("path")
     if not isinstance(file_path, str) or not file_path:
         raise HTTPException(400, "Falta el campo 'path' en el JSON.")
-    if not STORAGE_PATH_PATTERN.match(file_path) or '..' in file_path.split('/'):
+    if not STORAGE_PATH_PATTERN.fullmatch(file_path) or '..' in file_path.split('/'):
         raise HTTPException(400, "Ruta de estudio no válida.")
 
     print(f"📥 Solicitando a Firebase: {file_path}")

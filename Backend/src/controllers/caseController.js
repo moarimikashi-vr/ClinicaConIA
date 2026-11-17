@@ -45,7 +45,17 @@ const archivoSchema = z.object({
     size: z.number().nonnegative().optional(),
     type: z.string().max(100).optional(),
     uploadPath: z.string().max(500),
-});
+}).refine(
+    // La URL de descarga debe apuntar al mismo objeto que uploadPath (formato de getDownloadURL)
+    (a) => {
+        try {
+            return new URL(a.url).pathname.endsWith(`/o/${encodeURIComponent(a.uploadPath)}`);
+        } catch {
+            return false;
+        }
+    },
+    'La URL del archivo no corresponde a su ruta.'
+);
 
 const nuevoCasoSchema = z.object({
     pacienteNSS: z.string().trim().min(1).max(30),

@@ -199,7 +199,7 @@ const EnvioArchivos = ({ loggedInUser }) => {
                 const suffix = totalArchivos > 1 ? `-${index + 1}` : '';
                 const newFileName = `${patientName}-${safeName(String(envioData.pacienteSeleccionado.nss))}-${uploadDate}${suffix}${originalExtension}`;
 
-                const filePath = `casos/${loggedInUser.uid}/${envioData.pacienteSeleccionado.nss}/${newFileName}`;
+                const filePath = `casos/${loggedInUser.uid}/${String(envioData.pacienteSeleccionado.nss).trim()}/${newFileName}`;
                 const fileRef = ref(storage, filePath);
 
                 const metadata = {

@@ -14,7 +14,8 @@ const verifyToken = async (req, res, next) => {
 
     let decodedToken;
     try {
-        decodedToken = await admin.auth().verifyIdToken(idToken);
+        // checkRevoked: una sesión revocada (cuenta deshabilitada, contraseña cambiada) deja de servir de inmediato
+        decodedToken = await admin.auth().verifyIdToken(idToken, true);
     } catch {
         return res.status(401).json({ message: 'La sesión no es válida o expiró. Inicia sesión de nuevo.' });
     }

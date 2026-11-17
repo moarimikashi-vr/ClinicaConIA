@@ -209,7 +209,7 @@ const nuevoCaso = (over = {}) => ({
     pacienteNSS: '222',
     motivoConsulta: 'golpe',
     medicoEspecialistaId: 'med2',
-    archivos: [{ nombre: 'Luis_Paz-222.dcm', url: 'https://firebasestorage.googleapis.com/v0/b/x/o/a', size: 10, type: '', uploadPath: 'casos/aten1/222/Luis_Paz-222.dcm' }],
+    archivos: [{ nombre: 'Luis_Paz-222.dcm', url: 'https://firebasestorage.googleapis.com/v0/b/x/o/casos%2Faten1%2F222%2FLuis_Paz-222.dcm?alt=media&token=t', size: 10, type: '', uploadPath: 'casos/aten1/222/Luis_Paz-222.dcm' }],
     ...over,
 });
 
@@ -239,6 +239,9 @@ test('case creation rejects bad roles, specialists, patients and storage paths',
     assert.equal((await call('POST', '/casos', { token: T.atencion, body: otherUserPath })).status, 400);
     const traversal = nuevoCaso({ archivos: [{ ...nuevoCaso().archivos[0], uploadPath: 'casos/aten1/222/../../x.dcm' }] });
     assert.equal((await call('POST', '/casos', { token: T.atencion, body: traversal })).status, 400);
+    // The download URL must point to the same object as uploadPath
+    const mismatchedUrl = nuevoCaso({ archivos: [{ ...nuevoCaso().archivos[0], url: 'https://firebasestorage.googleapis.com/v0/b/x/o/casos%2Faten2%2F222%2Fotro.dcm?alt=media' }] });
+    assert.equal((await call('POST', '/casos', { token: T.atencion, body: mismatchedUrl })).status, 400);
     assert.equal(count(), start);
 });
 

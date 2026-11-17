@@ -22,12 +22,14 @@ Assumption: Firestore/Storage security rules live outside the repo; they are rep
 
 | ID | Specs | Route | Status | Evidence |
 |----|-------|-------|--------|----------|
-| T1 | S2-S5, S7 | inline | in progress | |
-| T2 | S6 | inline | pending | |
-| T3 | S3 (frontend PDF flow) | inline | pending | |
-| T4 | all | independent verifier (Risk item 2) | pending | |
+| T1 | S2-S5, S7 | inline | done | c5c74be; node --test 21/21 |
+| T2 | S6 | inline | done | 10d32ca; pytest 28/28 (RED vs baseline main.py observed) |
+| T3 | S3 (frontend PDF flow) | inline | done | ed7411a; vite build OK |
+| T4 | all | independent verifier (Risk item 2) | done | 0 blockers, S1–S7 pass; advisories 1,2,5,6 fixed in follow-up commit |
 
 ## Log
 
 - L1 (2026-11-17): "vamos a arreglar todos los errores de backend para tener una buena seguridad".
 - L2: Source review findings: unauthenticated `users`, `pacientes`, `reports` routes (anyone could register an administrador); per-case IDOR on read/comment/update; `PATCH /casos/:id` mass assignment; body-supplied author/owner; missing profile ⇒ no role ⇒ admin branch in `getCases`; HTML injection in e-mails; `debug_ids` leak; IA service open with `allow_origins=["*"]`.
+- L3 (2026-11-17): real services smoke test: all formerly public routes 401 without token; admin flows (cases, case, comments, patient, search, doctors) 200; PATCH with `estado` 400.
+- L4: Independent verifier: 0 blockers, S1–S7 pass. Advisories fixed: IA path regex `fullmatch` (trailing newline), token checked in middleware before body parsing, `/docs` and `/openapi.json` disabled, file URL must match `uploadPath`, `verifyIdToken(..., checkRevoked=true)`, ASCII startup warning, NSS trimmed in upload folder. Left for the owner: patient/case delete scope (any atencion deletes any patient; participants delete open cases), legacy NSS values with `.`/spaces, updateCase read-then-write without transaction, Firestore/Storage security rules (frontend reads `casos`, `comentarios`, `notifications` directly).
