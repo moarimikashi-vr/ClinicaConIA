@@ -20,6 +20,17 @@ export const primaryButton =
     + 'focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-900/30 '
     + 'disabled:cursor-not-allowed disabled:bg-blue-900/60 motion-reduce:transition-none';
 
+export const dangerButton =
+    'inline-flex items-center justify-center gap-2 rounded-lg bg-red-700 px-5 py-2.5 text-sm font-semibold text-white '
+    + 'transition-[background-color,scale] duration-150 ease-out hover:bg-red-800 enabled:active:scale-[0.96] '
+    + 'focus:outline-none focus-visible:ring-4 focus-visible:ring-red-700/30 '
+    + 'disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none';
+
+// Page surfaces
+export const cardClass = 'rounded-2xl border border-slate-200 bg-white';
+export const cardTitleClass = 'text-base font-semibold text-slate-900';
+export const pageTitleClass = 'text-2xl font-bold text-slate-900';
+
 export const secondaryButton =
     'inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 '
     + 'transition-[background-color,scale] duration-150 ease-out hover:bg-slate-50 enabled:active:scale-[0.96] '
