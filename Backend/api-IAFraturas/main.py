@@ -445,6 +445,11 @@ def _valid_regions(regiones):
     return all(isinstance(r, dict) and all(isinstance(r.get(k), (int, float)) for k in keys) for r in regiones)
 
 
+# Vistas previas simultáneas: una descarga que el backend ya abandonó por tiempo sigue ocupando
+# memoria y CPU aquí, así que las que excedan el cupo se rechazan en lugar de acumularse.
+PREVIEW_SLOTS = threading.BoundedSemaphore(2)
+
+
 # --- RUTA 3: Vista previa del estudio para el reporte PDF ---
 @app.post("/preview_firebase", dependencies=[Depends(require_service_token)])
 def preview_firebase(payload: dict = Body(...)):
@@ -455,10 +460,15 @@ def preview_firebase(payload: dict = Body(...)):
     regiones = payload.get("regiones", [])
     if not _valid_regions(regiones):
         raise HTTPException(400, "Regiones no válidas.")
-    file_path, blob = locate_study(payload)
+    if not PREVIEW_SLOTS.acquire(blocking=False):
+        raise HTTPException(503, "Servicio ocupado, intenta de nuevo.")
     try:
-        img_rgb, _ = decode_image(blob.download_as_bytes(), file_path)
-        return Response(content=render_preview(img_rgb, regiones), media_type="image/jpeg")
-    except Exception as e:
-        print(f"Error generando vista previa: {e}")
-        raise HTTPException(422, "No se pudo generar la vista previa.")
+        file_path, blob = locate_study(payload)
+        try:
+            img_rgb, _ = decode_image(blob.download_as_bytes(), file_path)
+            return Response(content=render_preview(img_rgb, regiones), media_type="image/jpeg")
+        except Exception as e:
+            print(f"Error generando vista previa: {e}")
+            raise HTTPException(422, "No se pudo generar la vista previa.")
+    finally:
+        PREVIEW_SLOTS.release()

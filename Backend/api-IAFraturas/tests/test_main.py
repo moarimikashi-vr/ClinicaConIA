@@ -335,6 +335,22 @@ def test_preview_firebase_download_failure_is_422(main, service_token, monkeypat
     assert r.json()["detail"] == "No se pudo generar la vista previa."
 
 
+def test_preview_firebase_refuses_when_all_slots_are_busy(main, service_token, monkeypatch):
+    png = cv2.imencode(".png", np.full((50, 50), 90, np.uint8))[1].tobytes()
+    monkeypatch.setattr(main.storage, "bucket", lambda: FakeBucket({"casos/u1/123/a.png": png}))
+    monkeypatch.setattr(main, "PREVIEW_SLOTS", main.threading.BoundedSemaphore(1))
+    client = TestClient(main.app)
+    main.PREVIEW_SLOTS.acquire()
+    try:
+        r = client.post("/preview_firebase", headers=TOKEN, json={"path": "casos/u1/123/a.png"})
+        assert r.status_code == 503
+    finally:
+        main.PREVIEW_SLOTS.release()
+    # the slot taken by a finished or failed preview is given back
+    assert client.post("/preview_firebase", headers=TOKEN, json={"path": "casos/u1/123/missing.png"}).status_code == 404
+    assert client.post("/preview_firebase", headers=TOKEN, json={"path": "casos/u1/123/a.png"}).status_code == 200
+
+
 def test_preview_firebase_is_protected_and_validates_input(main, service_token, monkeypatch):
     monkeypatch.setattr(main.storage, "bucket", lambda: FakeBucket({}))
     client = TestClient(main.app)
