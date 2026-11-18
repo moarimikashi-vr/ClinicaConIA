@@ -69,6 +69,31 @@ test('the preview uses the analysed study and its regions, only for image files'
     assert.equal(pickStudyForPreview(baseCase({ archivos: [{ nombre: 'notas.pdf', uploadPath: 'casos/a1/111/notas.pdf' }] })), null);
 });
 
+// ---------- layout of the study image + AI block ----------
+
+const { planStudyBlock, STUDY_BLOCK } = require('../src/reports/reportPdf');
+const reserved = STUDY_BLOCK.title + STUDY_BLOCK.note + STUDY_BLOCK.signature;
+
+test('the study block stays on the page at full size when there is room', () => {
+    assert.deepEqual(planStudyBlock({ y: 100, pageBottom: 698, panelH: 200, hasImage: true }), { newPage: false, blockH: 230 });
+});
+
+test('the study block shrinks the image to the room left instead of leaving the page half empty', () => {
+    const y = 698 - reserved - 190;
+    assert.deepEqual(planStudyBlock({ y, pageBottom: 698, panelH: 180, hasImage: true }), { newPage: false, blockH: 190 });
+});
+
+test('the study block moves to a new page when the AI panel or a useful image no longer fits', () => {
+    const y = 698 - reserved - 130;
+    assert.deepEqual(planStudyBlock({ y, pageBottom: 698, panelH: 200, hasImage: true }), { newPage: true, blockH: 230 });
+    assert.deepEqual(planStudyBlock({ y, pageBottom: 698, panelH: 0, hasImage: true }), { newPage: true, blockH: 230 });
+    assert.deepEqual(planStudyBlock({ y, pageBottom: 698, panelH: 120, hasImage: false }), { newPage: false, blockH: 130 });
+});
+
+test('the study block grows to an AI panel taller than the default height', () => {
+    assert.deepEqual(planStudyBlock({ y: 100, pageBottom: 698, panelH: 260, hasImage: true }), { newPage: false, blockH: 260 });
+});
+
 // ---------- endpoint ----------
 
 let server;
