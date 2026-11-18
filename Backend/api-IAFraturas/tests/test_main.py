@@ -310,6 +310,31 @@ def test_preview_firebase_returns_a_jpeg(main, service_token, monkeypatch):
     assert r.content[:3] == b"\xff\xd8\xff"
 
 
+class BrokenBlob(FakeBlob):
+    def download_as_bytes(self):
+        raise RuntimeError("storage unavailable")
+
+
+class BrokenBucket:
+    def get_blob(self, path):
+        return BrokenBlob(b"x")
+
+
+def test_analyze_firebase_download_failure_keeps_422(main, fakes, service_token, monkeypatch):
+    fakes(FakeClassifier(0.1))
+    monkeypatch.setattr(main.storage, "bucket", lambda: BrokenBucket())
+    r = TestClient(main.app).post("/analyze_firebase", json={"path": "casos/u1/123/a.dcm"}, headers=TOKEN)
+    assert r.status_code == 422
+    assert r.json()["detail"] == "No se pudo procesar la imagen."
+
+
+def test_preview_firebase_download_failure_is_422(main, service_token, monkeypatch):
+    monkeypatch.setattr(main.storage, "bucket", lambda: BrokenBucket())
+    r = TestClient(main.app).post("/preview_firebase", json={"path": "casos/u1/123/a.png"}, headers=TOKEN)
+    assert r.status_code == 422
+    assert r.json()["detail"] == "No se pudo generar la vista previa."
+
+
 def test_preview_firebase_is_protected_and_validates_input(main, service_token, monkeypatch):
     monkeypatch.setattr(main.storage, "bucket", lambda: FakeBucket({}))
     client = TestClient(main.app)

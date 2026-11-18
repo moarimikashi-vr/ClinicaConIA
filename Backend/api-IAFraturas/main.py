@@ -360,8 +360,12 @@ def predict_local(file: UploadFile = File(...)):
         print(f"Error analizando imagen local: {e}")
         raise HTTPException(500, "No se pudo analizar la imagen.")
 
-def download_study(payload):
-    """Valida la ruta del estudio y lo descarga de Storage (compartido por análisis y vista previa)."""
+def locate_study(payload):
+    """Valida la ruta del estudio y lo ubica en Storage (compartido por análisis y vista previa).
+
+    Devuelve (ruta, blob) sin descargarlo: cada ruta descarga dentro de su propio manejo de
+    errores, así un fallo de descarga en /analyze_firebase sigue respondiendo 422 como antes.
+    """
     file_path = payload.get("path")
     if not isinstance(file_path, str) or not file_path:
         raise HTTPException(400, "Falta el campo 'path' en el JSON.")
@@ -380,13 +384,7 @@ def download_study(payload):
         raise HTTPException(404, "El estudio no existe.")
     if blob.size is not None and blob.size > MAX_FILE_BYTES:
         raise HTTPException(413, "El estudio supera el tamaño máximo de 50 MB.")
-
-    try:
-        # Descargar a memoria RAM (sin guardar en disco)
-        return file_path, blob.download_as_bytes()
-    except Exception as e:
-        print(f"Error Firebase: {e}")
-        raise HTTPException(502, "No se pudo descargar el estudio.")
+    return file_path, blob
 
 
 # --- RUTA 2: Para tu sistema real (Conexión Firebase) ---
@@ -398,9 +396,10 @@ def analyze_firebase(payload: dict = Body(...)):
     """
     if MODEL is None: raise HTTPException(500, "Modelo no cargado.")
 
-    file_path, image_bytes = download_study(payload)
+    file_path, blob = locate_study(payload)
     try:
-        return analizar(image_bytes, file_path)
+        # Descargar a memoria RAM (sin guardar en disco) y analizar
+        return analizar(blob.download_as_bytes(), file_path)
     except Exception as e:
         print(f"Error Firebase/Procesamiento: {e}")
         raise HTTPException(422, "No se pudo procesar la imagen.")
@@ -456,9 +455,9 @@ def preview_firebase(payload: dict = Body(...)):
     regiones = payload.get("regiones", [])
     if not _valid_regions(regiones):
         raise HTTPException(400, "Regiones no válidas.")
-    file_path, image_bytes = download_study(payload)
+    file_path, blob = locate_study(payload)
     try:
-        img_rgb, _ = decode_image(image_bytes, file_path)
+        img_rgb, _ = decode_image(blob.download_as_bytes(), file_path)
         return Response(content=render_preview(img_rgb, regiones), media_type="image/jpeg")
     except Exception as e:
         print(f"Error generando vista previa: {e}")
