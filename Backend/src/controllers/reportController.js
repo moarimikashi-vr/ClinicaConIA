@@ -10,6 +10,22 @@ const iaServiceBaseUrl = () => {
     return url;
 };
 
+// Tope de espera de la vista previa: el usuario está esperando la descarga del PDF
+const PREVIEW_TIMEOUT_MS = 8000;
+
+// Ficha del paciente para el reporte. Si la lectura falla, el reporte se emite con los datos
+// que ya trae el caso en lugar de fallar.
+const fetchPatient = async (nss) => {
+    if (!nss) return null;
+    try {
+        const pacienteDoc = await db.collection('pacientes').doc(String(nss)).get();
+        return pacienteDoc.exists ? pacienteDoc.data() : null;
+    } catch (error) {
+        console.error('Ficha del paciente no disponible para el reporte:', error.message);
+        return null;
+    }
+};
+
 // Radiografía con las zonas de la IA, generada por el microservicio. Si no responde a tiempo,
 // el reporte se emite sin imagen en lugar de fallar.
 const fetchStudyPreview = async (caso) => {
@@ -22,7 +38,7 @@ const fetchStudyPreview = async (caso) => {
             {
                 headers: { 'X-IA-Token': process.env.IA_SERVICE_TOKEN || '' },
                 responseType: 'arraybuffer',
-                timeout: 20000,
+                timeout: PREVIEW_TIMEOUT_MS,
                 maxContentLength: 5 * 1024 * 1024,
             }
         );
@@ -47,11 +63,10 @@ const generateReport = async (req, res) => {
             return res.status(403).json({ message: 'No tienes permiso para ver este caso.' });
         }
 
-        const [pacienteDoc, preview] = await Promise.all([
-            caso.pacienteNSS ? db.collection('pacientes').doc(String(caso.pacienteNSS)).get() : null,
+        const [paciente, preview] = await Promise.all([
+            fetchPatient(caso.pacienteNSS),
             fetchStudyPreview(caso),
         ]);
-        const paciente = pacienteDoc && pacienteDoc.exists ? pacienteDoc.data() : null;
         const model = buildReportModel(id, caso, paciente);
 
         // El NSS va en un encabezado HTTP: solo caracteres seguros

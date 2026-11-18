@@ -22,13 +22,27 @@ const latestAnalysis = (caso) => {
     return entries.reduce((latest, e) => (!latest || String(e.fecha || '') > String(latest.fecha || '') ? e : latest), null);
 };
 
-// Study and regions for the image shown in the report: the analysed file, or the first image file
+// Same limit the IA service enforces on /preview_firebase
+const MAX_PREVIEW_REGIONS = 50;
+
+// Keeps only well-formed boxes, so one bad stored entry does not make the IA service reject
+// the whole preview
+const previewRegions = (regiones) => (Array.isArray(regiones) ? regiones : [])
+    .filter((r) => r && ['x0', 'y0', 'x1', 'y1'].every((k) => Number.isFinite(r[k])))
+    .slice(0, MAX_PREVIEW_REGIONS)
+    .map(({ x0, y0, x1, y1, confianza }) => ({ x0, y0, x1, y1, confianza: Number.isFinite(confianza) ? confianza : 0 }));
+
+// Study and regions for the image shown in the report: the analysed file, or the first image file.
+// Only files uploaded to this case qualify, so a path stored in the analysis entry can never
+// point the preview at another case's study.
 const pickStudyForPreview = (caso) => {
+    const archivos = (caso.archivos || []).filter((a) => a && typeof a.uploadPath === 'string' && a.uploadPath);
+    const uploaded = new Set(archivos.map((a) => a.uploadPath));
     const analysis = latestAnalysis(caso);
-    if (analysis && analysis.archivo && IMAGE_EXTENSIONS.includes(extensionOf(analysis.archivo))) {
-        return { path: analysis.archivo, regiones: Array.isArray(analysis.regiones) ? analysis.regiones : [] };
+    if (analysis && uploaded.has(analysis.archivo) && IMAGE_EXTENSIONS.includes(extensionOf(analysis.archivo))) {
+        return { path: analysis.archivo, regiones: previewRegions(analysis.regiones) };
     }
-    const file = (caso.archivos || []).find((a) => a.uploadPath && IMAGE_EXTENSIONS.includes(extensionOf(a.nombre)));
+    const file = archivos.find((a) => IMAGE_EXTENSIONS.includes(extensionOf(a.nombre)));
     return file ? { path: file.uploadPath, regiones: [] } : null;
 };
 

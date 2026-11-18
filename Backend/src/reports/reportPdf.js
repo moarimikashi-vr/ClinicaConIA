@@ -71,7 +71,8 @@ const renderReport = (model, output, { preview = null } = {}) => {
         info: {
             Title: `Informe de radiodiagnóstico ${model.folio}`,
             Author: 'Sistema de Teleradiodiagnóstico',
-            Subject: `Paciente ${model.paciente.nombre}`,
+            // No patient data in the file metadata: it shows up in file listings and indexers
+            Subject: 'Informe de radiodiagnóstico',
         },
     });
     doc.registerFont('Regular', path.join(FONT_DIR, 'ibm-plex-sans-latin-400-normal.woff'));

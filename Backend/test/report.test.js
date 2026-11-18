@@ -69,6 +69,21 @@ test('the preview uses the analysed study and its regions, only for image files'
     assert.equal(pickStudyForPreview(baseCase({ archivos: [{ nombre: 'notas.pdf', uploadPath: 'casos/a1/111/notas.pdf' }] })), null);
 });
 
+test('the preview only uses files uploaded to the case, never a path stored only in the analysis', () => {
+    const caso = baseCase({ iaRegiones: [{ archivo: 'casos/otro/999/ajeno.dcm', fecha: 'x', regiones: [{ x0: 1, y0: 2, x1: 3, y1: 4, confianza: 0.5 }] }] });
+    assert.deepEqual(pickStudyForPreview(caso), { path: 'casos/a1/111/Ana_Ruiz-111.dcm', regiones: [] });
+});
+
+test('the preview drops malformed regions and caps them at 50', () => {
+    const good = { x0: 1, y0: 2, x1: 3, y1: 4, confianza: 0.5 };
+    const regiones = [null, { x0: 'a', y0: 2, x1: 3, y1: 4 }, { x0: 1, y0: 2, x1: 3 }, { x0: 5, y0: 6, x1: 7, y1: 8 }, ...Array(60).fill(good)];
+    const caso = baseCase({ iaRegiones: [{ archivo: 'casos/a1/111/Ana_Ruiz-111.dcm', fecha: 'x', regiones }] });
+    const picked = pickStudyForPreview(caso).regiones;
+    assert.equal(picked.length, 50);
+    assert.deepEqual(picked[0], { x0: 5, y0: 6, x1: 7, y1: 8, confianza: 0 });
+    assert.deepEqual(picked[1], good);
+});
+
 // ---------- layout of the study image + AI block ----------
 
 const { planStudyBlock, STUDY_BLOCK } = require('../src/reports/reportPdf');
@@ -130,6 +145,13 @@ test('the report is a PDF for participants and is still produced when the IA ser
     assert.equal(r.type, 'application/pdf');
     assert.equal(r.body.subarray(0, 5).toString(), '%PDF-');
     assert.equal((await download(T.otro)).status, 403);
+});
+
+test('the report is still produced when the patient record cannot be read', async () => {
+    fake.db.failReads('pacientes');
+    const r = await download(T.medico);
+    assert.equal(r.status, 200);
+    assert.equal(r.body.subarray(0, 5).toString(), '%PDF-');
 });
 
 test('the report asks the IA service for the study preview with the token and embeds it', async () => {
