@@ -1,8 +1,44 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import {
+    ArrowDownTrayIcon,
+    DocumentIcon,
+    LockClosedIcon,
+    PencilSquareIcon,
+    SparklesIcon,
+    ViewColumnsIcon,
+} from '@heroicons/react/24/outline';
 import apiClient from '../api/axiosConfig';
 import { db } from '../firebaseConfig'; // Importamos la instancia de la DB
 import { doc, onSnapshot, collection, query, orderBy } from 'firebase/firestore';
+import { usePersistentToggle } from '../hooks/usePersistentToggle';
+import InfoRow from '../components/ui/InfoRow';
+import { IA_AUTHOR_ID } from '../constants/ia';
+import {
+    cardClass,
+    cardTitleClass,
+    dangerButton,
+    inputClass,
+    pageTitleClass,
+    primaryButton,
+    secondaryButton,
+} from '../components/ui/formStyles';
+
+// fechaCreacion llega como cadena ISO (backend) o como Timestamp de Firestore
+const formatFecha = (fecha) => {
+    if (!fecha) return '';
+    const date = typeof fecha === 'string' ? new Date(fecha) : fecha.seconds ? new Date(fecha.seconds * 1000) : null;
+    if (!date || Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' });
+};
+
+const ROL_LABELS = {
+    medico: 'Médico especialista',
+    atencion: 'Personal de atención',
+    administrador: 'Administrador',
+    sistema: 'Sistema',
+};
 
 const CasoDetalle = ({ loggedInUser }) => {
     const { id } = useParams(); // Obtiene el ID del caso desde la URL
@@ -12,11 +48,12 @@ const CasoDetalle = ({ loggedInUser }) => {
     const [nuevoComentario, setNuevoComentario] = useState('');
     const [diagnostico, setDiagnostico] = useState('');
     const [isSavingDiagnosis, setIsSavingDiagnosis] = useState(false);
+    const [isGeneratingReport, setIsGeneratingReport] = useState(false);
     const [loading, setLoading] = useState(true);
     const [showConfirmModal, setShowConfirmModal] = useState(false);
     const [error, setError] = useState('');
-    const [statusMessage, setStatusMessage] = useState('');
     const [isEditingDiagnosis, setIsEditingDiagnosis] = useState(false);
+    const [showDetails, toggleDetails] = usePersistentToggle('ui.caseDetailsPanel', true);
 
     useEffect(() => {
         if (!id) return;
@@ -69,24 +106,17 @@ const CasoDetalle = ({ loggedInUser }) => {
         if (!nuevoComentario.trim()) return;
 
         try {
-            const comentarioData = {
+            await apiClient.post(`/casos/${id}/comentarios`, {
                 texto: nuevoComentario,
                 autorId: loggedInUser.uid,
                 autorNombre: `${loggedInUser.nombre} ${loggedInUser.apellido}`,
                 autorRol: loggedInUser.rol,
-            };
-
-            const response = await apiClient.post(`/casos/${id}/comentarios`, comentarioData);
-
-            // Añadimos el nuevo comentario a la lista localmente para una UI más rápida
-            // NOTA: Esto es opcional, ya que el listener onSnapshot hará lo mismo.
-            // Lo mantenemos para que la UI se sienta más instantánea para el que escribe.
-            // setComentarios(prevComentarios => [...prevComentarios, response.data]);
-
-            setNuevoComentario(''); // Limpiamos el input
+            });
+            // El listener onSnapshot agrega el comentario a la lista
+            setNuevoComentario('');
         } catch (error) {
             console.error("Error al añadir comentario:", error);
-            alert("No se pudo añadir el comentario.");
+            toast.error('No se pudo enviar el comentario. Inténtalo de nuevo.');
         }
     };
 
@@ -94,22 +124,24 @@ const CasoDetalle = ({ loggedInUser }) => {
         setIsSavingDiagnosis(true);
         try {
             await apiClient.patch(`/casos/${id}`, { diagnostico });
-            setStatusMessage('✅ Diagnóstico guardado correctamente.');
+            toast.success('Diagnóstico guardado.');
             setIsEditingDiagnosis(false);
-            // Opcional: Limpiar el mensaje después de 5 segundos
-            setTimeout(() => setStatusMessage(''), 5000);
         } catch (error) {
             console.error('Error al guardar diagnóstico:', error);
-            setStatusMessage('❌ Error al guardar el diagnóstico.');
+            toast.error('No se pudo guardar el diagnóstico.');
         } finally {
             setIsSavingDiagnosis(false);
         }
     };
 
     const handleGenerateReport = async () => {
+        setIsGeneratingReport(true);
         try {
-            // Primero guardamos el diagnóstico actual para asegurar que salga en el PDF
-            await apiClient.patch(`/casos/${id}`, { diagnostico });
+            // El especialista asignado guarda primero el diagnóstico en edición para que salga en el PDF;
+            // los demás descargan el diagnóstico ya guardado (el backend solo le permite escribirlo a él)
+            if (esMedicoAsignado && isCasoAbierto && diagnostico !== (caso.diagnostico || '')) {
+                await apiClient.patch(`/casos/${id}`, { diagnostico });
+            }
 
             const response = await apiClient.post(`/reports/${id}/generate`, {}, {
                 responseType: 'blob' // Importante para descargar archivos
@@ -125,7 +157,9 @@ const CasoDetalle = ({ loggedInUser }) => {
             link.parentNode.removeChild(link);
         } catch (error) {
             console.error('Error al generar el reporte:', error);
-            alert('No se pudo generar el reporte PDF.');
+            toast.error('No se pudo generar el reporte PDF.');
+        } finally {
+            setIsGeneratingReport(false);
         }
     };
 
@@ -134,253 +168,255 @@ const CasoDetalle = ({ loggedInUser }) => {
         try {
             await apiClient.patch(`/casos/${id}/cerrar`);
             // El listener onSnapshot se encargará de actualizar el estado del caso.
-            // setCaso(prevCaso => ({ ...prevCaso, estado: 'cerrado' }));
-            // alert('El caso ha sido cerrado con éxito.'); // Reemplazado por la actualización automática
+            toast.success('Caso cerrado.');
         } catch (error) {
             console.error("Error al cerrar el caso:", error);
-            alert('No se pudo cerrar el caso.');
+            toast.error('No se pudo cerrar el caso.');
         }
     };
 
-
     if (loading) {
-        return <div className="p-8 text-center">Cargando detalles del caso...</div>;
+        return <div className="p-8 text-center text-slate-500">Cargando detalles del caso…</div>;
     }
 
     if (error) {
-        return <div className="p-8 text-center text-blue-500">{error}</div>;
+        return <div className="p-8 text-center text-red-700">{error}</div>;
     }
 
     if (!caso) {
-        return <div className="p-8 text-center">Caso no encontrado.</div>;
+        return <div className="p-8 text-center text-slate-500">Caso no encontrado.</div>;
     }
-
-    // Estilos para reutilizar
-    const cardStyle = "bg-white p-6 rounded-lg shadow-md";
-    const titleStyle = "text-xl font-bold text-gray-800 mb-4 border-b pb-2";
 
     const isCasoAbierto = caso.estado === 'abierto';
     const puedeCerrarCaso = loggedInUser && loggedInUser.rol === 'medico' && loggedInUser.uid === caso.medicoEspecialistaId;
     const esMedicoAsignado = loggedInUser && loggedInUser.uid === caso.medicoEspecialistaId;
+    const textareaClass = `${inputClass(false)} resize-none`;
 
     return (
-        <div className="p-8 bg-gray-50 min-h-full">
+        <div className="mx-auto w-full max-w-7xl px-2 py-4 sm:px-4">
             {/* Modal de Confirmación */}
             {showConfirmModal && (
-                <div className="fixed inset-0 bg-gray-500 bg-opacity-25 backdrop-blur-sm flex justify-center items-center z-50">
-                    <div className="bg-white p-8 rounded-lg shadow-2xl max-w-sm w-full">
-                        <h2 className="text-2xl font-bold text-gray-800 mb-4">Confirmar Cierre</h2>
-                        <p className="text-gray-600 mb-6">
-                            ¿Estás seguro de que deseas cerrar esta cita? Esta acción es irreversible.
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="cerrar-caso-titulo"
+                >
+                    <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
+                        <h2 id="cerrar-caso-titulo" className="text-lg font-semibold text-slate-900">¿Cerrar este caso?</h2>
+                        <p className="mt-2 text-sm text-slate-600">
+                            Ya no se podrán agregar comentarios ni cambiar el diagnóstico. Esta acción no se puede deshacer.
                         </p>
-                        <div className="flex justify-end space-x-4">
-                            <button
-                                onClick={() => setShowConfirmModal(false)}
-                                className="px-4 py-2 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition"
-                            >
+                        <div className="mt-6 flex justify-end gap-3">
+                            <button onClick={() => setShowConfirmModal(false)} className={secondaryButton} autoFocus>
                                 Cancelar
                             </button>
-                            <button
-                                onClick={handleCerrarCaso}
-                                className="px-4 py-2 bg-blue-500 text-white font-semibold rounded-lg hover:bg-blue-600 transition"
-                            >
-                                Sí, cerrar caso
+                            <button onClick={handleCerrarCaso} className={dangerButton}>
+                                Cerrar caso
                             </button>
                         </div>
                     </div>
                 </div>
             )}
 
-            <div className="flex justify-between items-center mb-2">
-                <h1 className="text-3xl font-bold text-gray-800">Detalle del Caso</h1>
-                <span className={`px-3 py-1 text-sm font-semibold rounded-full ${isCasoAbierto ? 'bg-green-100 text-green-800' : 'bg-gray-200 text-gray-700'
-                    }`}>
-                    {isCasoAbierto ? 'Abierto' : 'Cerrado'}
-                </span>
-            </div>
-
-            {statusMessage && (
-                <div className={`p-4 mb-6 rounded-lg font-medium shadow-sm transition-all animate-pulse ${statusMessage.startsWith('✅') ? 'bg-green-100 text-green-700' :
-                    'bg-red-100 text-red-700'
-                    }`}>
-                    {statusMessage}
+            {/* Encabezado */}
+            <header className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                <div className="min-w-0">
+                    <div className="flex items-center gap-3">
+                        <h1 className={pageTitleClass}>{caso.pacienteNombreCompleto}</h1>
+                        <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${isCasoAbierto ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'}`}>
+                            {isCasoAbierto ? 'Abierto' : 'Cerrado'}
+                        </span>
+                    </div>
+                    <p className="mt-1 text-sm text-slate-600">
+                        Caso clínico · NSS {caso.pacienteNSS}
+                        {caso.fechaCreacion && <> · Creado el {formatFecha(caso.fechaCreacion)}</>}
+                    </p>
                 </div>
-            )}
+                <div className="flex flex-wrap items-center gap-2">
+                    <button
+                        onClick={toggleDetails}
+                        aria-pressed={showDetails}
+                        aria-controls="caso-detalles"
+                        className={`${secondaryButton} hidden lg:inline-flex`}
+                    >
+                        <ViewColumnsIcon className="h-4 w-4" />
+                        {showDetails ? 'Ocultar detalles' : 'Mostrar detalles'}
+                    </button>
+                    <button onClick={handleGenerateReport} disabled={isGeneratingReport} className={secondaryButton}>
+                        <ArrowDownTrayIcon className="h-4 w-4" />
+                        {isGeneratingReport ? 'Generando…' : 'Descargar reporte PDF'}
+                    </button>
+                    {isCasoAbierto && puedeCerrarCaso && (
+                        <button onClick={() => setShowConfirmModal(true)} className={dangerButton}>
+                            <LockClosedIcon className="h-4 w-4" />
+                            Cerrar caso
+                        </button>
+                    )}
+                </div>
+            </header>
 
-            <p className="text-gray-600 mb-6">Paciente: <span className="font-semibold">{caso.pacienteNombreCompleto}</span> (NSS: {caso.pacienteNSS})</p>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                {/* Columna Izquierda: Información y Comentarios */}
-                <div className="lg:col-span-2 space-y-8">
-                    {/* Archivos Adjuntos */}
-                    <div className={cardStyle}>
-                        <h2 className={titleStyle}>Archivos Adjuntos</h2>
-                        <ul className="space-y-2">
-                            {caso.archivos && caso.archivos.length > 0 ? (
-                                caso.archivos.map((archivo, index) => (
-                                    <li key={index} className="flex items-center text-gray-700">
-                                        <svg className="w-5 h-5 mr-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" /></svg>
+            <div className={`grid grid-cols-1 gap-6 ${showDetails ? 'lg:grid-cols-[minmax(0,1fr)_320px]' : ''}`}>
+                {/* Columna principal: estudios, diagnóstico y conversación */}
+                <div className="min-w-0 space-y-6">
+                    <section className={`${cardClass} p-5`}>
+                        <h2 className={cardTitleClass}>Estudios</h2>
+                        {caso.archivos && caso.archivos.length > 0 ? (
+                            <ul className="mt-3 divide-y divide-slate-100">
+                                {caso.archivos.map((archivo, index) => (
+                                    <li key={index}>
                                         <Link
-                                            to={`/app/viewer?url=${encodeURIComponent(archivo.url)}&nss=${caso.pacienteNSS}`}
-                                            target="_self"
-                                            className="hover:text-blue-500 hover:underline"
+                                            to={`/app/viewer?url=${encodeURIComponent(archivo.url)}&nss=${caso.pacienteNSS}&caso=${caso.id}&archivo=${encodeURIComponent(archivo.uploadPath || archivo.nombre)}`}
+                                            className="flex items-center gap-3 rounded-lg px-2 py-2.5 text-sm text-slate-700 hover:bg-slate-50 hover:text-blue-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-900/40"
                                         >
-                                            {archivo.nombre}
+                                            <DocumentIcon className="h-5 w-5 flex-shrink-0 text-slate-400" />
+                                            <span className="min-w-0 flex-1 truncate">{archivo.nombre}</span>
+                                            <span className="text-xs font-medium text-blue-900">Abrir en el visor</span>
                                         </Link>
                                     </li>
-                                ))
-                            ) : (
-                                <p className="text-gray-500 italic">No hay archivos adjuntos.</p>
-                            )}
-                        </ul>
-                    </div>
-
-                    {/* Sección de Comentarios */}
-                    <div className={cardStyle}>
-                        <h2 className={titleStyle}>Comentarios y Discusión</h2>
-                        <div className="space-y-4 mb-6 max-h-96 overflow-y-auto pr-2">
-                            {comentarios.length > 0 ? (
-                                comentarios.map((com, index) => (
-                                    <div key={com.id || index} className={`p-3 rounded-lg ${com.autorId === loggedInUser.uid ? 'bg-blue-50 ml-8' : 'bg-gray-100 mr-8'}`}>
-                                        <div className="flex justify-between items-start mb-1">
-                                            <span className="font-bold text-xs text-gray-700">{com.autorNombre} <span className="font-normal text-gray-500">({com.autorRol})</span></span>
-                                            <span className="text-[10px] text-gray-400">
-                                                {com.fechaCreacion?.seconds ? new Date(com.fechaCreacion.seconds * 1000).toLocaleString() : 'Recién enviado'}
-                                            </span>
-                                        </div>
-                                        <p className="text-sm text-gray-800 whitespace-pre-wrap">{com.texto}</p>
-                                    </div>
-                                ))
-                            ) : (
-                                <p className="text-gray-500 italic text-center py-4">No hay comentarios en este caso yet.</p>
-                            )}
-                        </div>
-
-                        {isCasoAbierto && (
-                            <form onSubmit={handleAddComentario} className="mt-4">
-                                <textarea
-                                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none text-sm"
-                                    rows="3"
-                                    placeholder="Escribe un comentario o nota médica..."
-                                    value={nuevoComentario}
-                                    onChange={(e) => setNuevoComentario(e.target.value)}
-                                ></textarea>
-                                <div className="flex justify-end mt-2">
-                                    <button
-                                        type="submit"
-                                        disabled={!nuevoComentario.trim()}
-                                        className="px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-lg hover:bg-blue-700 transition disabled:opacity-50"
-                                    >
-                                        Enviar Comentario
-                                    </button>
-                                </div>
-                            </form>
+                                ))}
+                            </ul>
+                        ) : (
+                            <p className="mt-3 text-sm text-slate-500">Este caso no tiene estudios adjuntos.</p>
                         )}
-                    </div>
-                </div>
+                    </section>
 
-                {/* Columna Derecha: Información y Diagnóstico */}
-                <div className="space-y-8">
-                    <div className={cardStyle}>
-                        <h2 className={titleStyle}>Médicos Involucrados</h2>
-                        <div className="space-y-2">
-                            <p className="text-sm"><strong className="font-medium text-gray-600">Médico General:</strong><br /> {caso.medicoGeneralNombre}</p>
-                            <p className="text-sm"><strong className="font-medium text-gray-600">Médico Especialista:</strong><br /> {caso.medicoEspecialistaNombre}</p>
-                        </div>
-                    </div>
-
-                    {/* Tarjeta de Información del Paciente */}
-                    {paciente && (
-                        <div className={cardStyle}>
-                            <h2 className={titleStyle}>Información del Paciente</h2>
-                            <div className="grid grid-cols-2 gap-2 text-sm">
-                                <p><strong className="font-medium">Sangre:</strong> {paciente.tiposangre || '?'}</p>
-                                <p><strong className="font-medium">Edad:</strong> {paciente.edad || '?'} años</p>
-                                <p><strong className="font-medium">Estatura:</strong> {paciente.estatura || '?'} m</p>
-                                <p><strong className="font-medium">Peso:</strong> {paciente.peso || '?'} kg</p>
-                                <p className="col-span-2"><strong className="font-medium">IMC:</strong> {paciente.imc || '?'}</p>
-                                <p><strong className="font-medium">Diabetes:</strong> {paciente.diabetes ? 'Sí' : 'No'}</p>
-                                <p><strong className="font-medium">Hipertensión:</strong> {paciente.hipertension ? 'Sí' : 'No'}</p>
-                            </div>
-                            <div className="mt-3 pt-3 border-t">
-                                <p className="text-xs font-bold text-gray-500 uppercase">Antecedentes:</p>
-                                <p className="text-sm text-gray-700">{paciente.antecedentes || 'Sin antecedentes registrados.'}</p>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Sección de Diagnóstico */}
-                    <div className={cardStyle}>
-                        <div className="flex justify-between items-center mb-4 border-b pb-2">
-                            <h2 className="text-xl font-bold text-gray-800">Diagnóstico Final</h2>
+                    <section className={`${cardClass} p-5`}>
+                        <div className="flex items-center justify-between gap-3">
+                            <h2 className={cardTitleClass}>Diagnóstico final</h2>
                             {isCasoAbierto && esMedicoAsignado && !isEditingDiagnosis && (
                                 <button
                                     onClick={() => setIsEditingDiagnosis(true)}
-                                    className="text-blue-600 hover:text-blue-800 text-sm font-semibold flex items-center"
+                                    className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-semibold text-blue-900 hover:bg-blue-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-900/40"
                                 >
-                                    <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                                    Editar
+                                    <PencilSquareIcon className="h-4 w-4" />
+                                    {diagnostico ? 'Editar' : 'Escribir diagnóstico'}
                                 </button>
                             )}
                         </div>
                         {isCasoAbierto && esMedicoAsignado && isEditingDiagnosis ? (
-                            <div className="space-y-4">
+                            <div className="mt-3 space-y-3">
+                                <label htmlFor="diagnostico" className="sr-only">Diagnóstico final</label>
                                 <textarea
-                                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none text-sm"
+                                    id="diagnostico"
+                                    className={textareaClass}
                                     rows="6"
-                                    placeholder="Ingrese el diagnóstico final aquí..."
+                                    placeholder="Hallazgos, impresión diagnóstica y recomendaciones."
                                     value={diagnostico}
                                     onChange={(e) => setDiagnostico(e.target.value)}
                                 ></textarea>
-                                <div className="flex gap-2">
+                                <div className="flex justify-end gap-2">
                                     <button
                                         onClick={() => {
                                             setIsEditingDiagnosis(false);
                                             setDiagnostico(caso.diagnostico || '');
                                         }}
-                                        className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition"
+                                        className={secondaryButton}
                                     >
                                         Cancelar
                                     </button>
-                                    <button
-                                        onClick={handleSaveDiagnosis}
-                                        disabled={isSavingDiagnosis}
-                                        className="flex-[2] px-4 py-2 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 transition disabled:opacity-50"
-                                    >
-                                        {isSavingDiagnosis ? 'Guardando...' : 'Guardar Diagnóstico'}
+                                    <button onClick={handleSaveDiagnosis} disabled={isSavingDiagnosis} className={primaryButton}>
+                                        {isSavingDiagnosis ? 'Guardando…' : 'Guardar diagnóstico'}
                                     </button>
                                 </div>
                             </div>
                         ) : (
-                            <div className="p-4 bg-gray-50 rounded-lg border border-gray-200 min-h-[100px]">
-                                <p className="text-sm text-gray-800 whitespace-pre-wrap italic">
-                                    {diagnostico || 'Aún no se ha emitido un diagnóstico final.'}
-                                </p>
-                            </div>
+                            <p className={`mt-3 whitespace-pre-wrap text-sm ${diagnostico ? 'text-slate-800' : 'text-slate-500'}`}>
+                                {diagnostico || 'El especialista todavía no emite el diagnóstico final.'}
+                            </p>
                         )}
-                    </div>
+                    </section>
 
-                    {/* Acciones Adicionales */}
-                    <div className={cardStyle}>
-                        <h2 className={titleStyle}>Acciones</h2>
-                        <div className="space-y-3">
-                            <button
-                                onClick={handleGenerateReport}
-                                className="w-full px-4 py-2 bg-gray-800 text-white font-semibold rounded-lg hover:bg-black transition"
-                            >
-                                Descargar Reporte PDF
-                            </button>
-                            {isCasoAbierto && puedeCerrarCaso && (
-                                <button
-                                    onClick={() => setShowConfirmModal(true)}
-                                    className="w-full px-4 py-2 bg-red-600 text-white font-semibold rounded-lg hover:bg-red-700 transition"
-                                >
-                                    Cerrar Caso
-                                </button>
+                    <section className={`${cardClass} p-5`}>
+                        <h2 className={cardTitleClass}>Conversación</h2>
+                        <ol className="mt-4 max-h-[28rem] space-y-3 overflow-y-auto overscroll-contain pr-1">
+                            {comentarios.length > 0 ? (
+                                comentarios.map((com, index) => {
+                                    const esIA = com.autorId === IA_AUTHOR_ID;
+                                    const esPropio = com.autorId === loggedInUser.uid;
+                                    return (
+                                        <li
+                                            key={com.id || index}
+                                            className={`rounded-xl border p-3 ${esIA
+                                                ? 'border-amber-200 bg-amber-50'
+                                                : esPropio ? 'ml-8 border-blue-100 bg-blue-50' : 'mr-8 border-slate-200 bg-slate-50'
+                                                }`}
+                                        >
+                                            <div className="mb-1 flex items-start justify-between gap-3">
+                                                <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-800">
+                                                    {esIA && <SparklesIcon className="h-4 w-4 text-amber-600" />}
+                                                    {com.autorNombre}
+                                                    <span className="font-normal text-slate-500">· {ROL_LABELS[com.autorRol] || com.autorRol}</span>
+                                                </span>
+                                                <time className="flex-shrink-0 text-[11px] text-slate-500">
+                                                    {formatFecha(com.fechaCreacion) || 'Recién enviado'}
+                                                </time>
+                                            </div>
+                                            <p className="whitespace-pre-wrap text-sm text-slate-800">{com.texto}</p>
+                                        </li>
+                                    );
+                                })
+                            ) : (
+                                <li className="py-4 text-center text-sm text-slate-500">Todavía no hay comentarios en este caso.</li>
                             )}
-                        </div>
-                    </div>
+                        </ol>
+
+                        {isCasoAbierto && (
+                            <form onSubmit={handleAddComentario} className="mt-4 space-y-2">
+                                <label htmlFor="nuevo-comentario" className="sr-only">Nuevo comentario</label>
+                                <textarea
+                                    id="nuevo-comentario"
+                                    className={textareaClass}
+                                    rows="3"
+                                    placeholder="Escribe un comentario o nota médica…"
+                                    value={nuevoComentario}
+                                    onChange={(e) => setNuevoComentario(e.target.value)}
+                                ></textarea>
+                                <div className="flex justify-end">
+                                    <button type="submit" disabled={!nuevoComentario.trim()} className={primaryButton}>
+                                        Enviar comentario
+                                    </button>
+                                </div>
+                            </form>
+                        )}
+                    </section>
                 </div>
+
+                {/* Panel lateral ocultable: médicos y paciente */}
+                <aside id="caso-detalles" className={`${showDetails ? '' : 'lg:hidden'} space-y-6`}>
+                    <section className={`${cardClass} p-5`}>
+                        <h2 className={cardTitleClass}>Médicos</h2>
+                        <dl className="mt-2">
+                            <InfoRow label="General">{caso.medicoGeneralNombre}</InfoRow>
+                            <InfoRow label="Especialista">{caso.medicoEspecialistaNombre}</InfoRow>
+                        </dl>
+                    </section>
+
+                    {paciente && (
+                        <section className={`${cardClass} p-5`}>
+                            <h2 className={cardTitleClass}>Paciente</h2>
+                            <dl className="mt-2 divide-y divide-slate-100">
+                                <InfoRow label="Edad">{paciente.edad || '—'} años</InfoRow>
+                                <InfoRow label="Tipo de sangre">{paciente.tiposangre || '—'}</InfoRow>
+                                <InfoRow label="Estatura">{paciente.estatura || '—'} m</InfoRow>
+                                <InfoRow label="Peso">{paciente.peso || '—'} kg</InfoRow>
+                                <InfoRow label="IMC">{paciente.imc || '—'}</InfoRow>
+                                <InfoRow label="Diabetes">{paciente.diabetes ? 'Sí' : 'No'}</InfoRow>
+                                <InfoRow label="Hipertensión">{paciente.hipertension ? 'Sí' : 'No'}</InfoRow>
+                            </dl>
+                            <div className="mt-3 border-t border-slate-100 pt-3">
+                                <p className="text-xs font-medium text-slate-500">Antecedentes</p>
+                                <p className="mt-1 text-sm text-slate-700">{paciente.antecedentes || 'Sin antecedentes registrados.'}</p>
+                            </div>
+                            <Link
+                                to={`/app/alta-paciente/${paciente.nss}`}
+                                className="mt-3 inline-block text-sm font-medium text-blue-900 hover:underline"
+                            >
+                                Ver expediente completo
+                            </Link>
+                        </section>
+                    )}
+                </aside>
             </div>
         </div>
     );

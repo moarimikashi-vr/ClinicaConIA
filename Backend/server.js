@@ -1,71 +1,7 @@
 require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const helmet = require('helmet');
+const app = require('./src/app');
 
-// Importar Rutas
-const userRoutes = require('./src/routes/userRoutes');
-const patientRoutes = require('./src/routes/patientRoutes');
-const caseRoutes = require('./src/routes/caseRoutes');
-const reportRoutes = require('./src/routes/reportRoutes');
-
-const app = express();
 const port = process.env.PORT || 3001;
-
-// --- MIDDLEWARE ---
-app.use(helmet()); // Seguridad HTTP
-
-// Configuración de CORS dinámica
-// Configuración de CORS dinámica
-const allowedOrigins = process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
-    : ['http://localhost:5173', 'http://localhost:3001'];
-
-console.log('✅ CORS Allowed Origins:', allowedOrigins);
-
-app.use(cors({
-    origin: (origin, callback) => {
-        // Permitir peticiones sin origen (como apps móviles o curl)
-        if (!origin) return callback(null, true);
-
-        if (allowedOrigins.includes(origin)) {
-            callback(null, true);
-        } else {
-            console.error(`❌ CORS BLOCKED: Origin '${origin}' is not in the allowed list.`);
-            callback(new Error('Bloqueado por CORS policy'));
-        }
-    },
-    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'PUT'],
-    credentials: true
-}));
-app.use(express.json()); // Permite al servidor entender JSON
-
-// --- RUTAS DE LA API ---
-app.use('/api/users', userRoutes);
-app.use('/api/pacientes', patientRoutes);
-app.use('/api/casos', caseRoutes);
-app.use('/api/reports', reportRoutes);
-
-// Ruta base de prueba
-app.get('/', (req, res) => {
-    res.send('API de Radiodiagnóstico funcionando correctamente.');
-});
-
-// --- MIDDLEWARE DE MANEJO DE ERRORES GLOBAL ---
-// Este middleware captura cualquier error que ocurra en las rutas
-app.use((err, req, res, next) => {
-    console.error(`[ERROR] ${err.message}`);
-
-    const statusCode = err.statusCode || 500;
-    const message = err.message || 'Error interno del servidor';
-
-    res.status(statusCode).json({
-        success: false,
-        status: statusCode,
-        message: message,
-        stack: process.env.NODE_ENV === 'development' ? err.stack : {}
-    });
-});
 
 // --- INICIAR SERVIDOR ---
 app.listen(port, async () => {

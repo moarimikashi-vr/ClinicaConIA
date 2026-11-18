@@ -2,9 +2,20 @@
 
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import { LockClosedIcon } from '@heroicons/react/24/outline';
 import apiClient from '../api/axiosConfig';
+import {
+    cardClass,
+    cardTitleClass,
+    errorClass,
+    inputClass,
+    labelClass,
+    pageTitleClass,
+    primaryButton,
+} from '../components/ui/formStyles';
 
-// Estructura inicial del paciente 
+// Estructura inicial del paciente
 const initialPacienteState = {
     nombre: '',
     apellidoP: '',
@@ -23,13 +34,54 @@ const initialPacienteState = {
     medicamentos: '',
 };
 
+const TIPOS_SANGRE = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
+
+// Clasificación de la OMS para adultos
+const clasificarIMC = (imc) => {
+    const v = parseFloat(imc);
+    if (!v) return null;
+    if (v < 18.5) return { label: 'Bajo peso', tone: 'bg-amber-50 text-amber-800 border-amber-200' };
+    if (v < 25) return { label: 'Normal', tone: 'bg-emerald-50 text-emerald-800 border-emerald-200' };
+    if (v < 30) return { label: 'Sobrepeso', tone: 'bg-amber-50 text-amber-800 border-amber-200' };
+    return { label: 'Obesidad', tone: 'bg-red-50 text-red-800 border-red-200' };
+};
+
+// Componentes a nivel de módulo: dentro del render se recrearían en cada tecla y los
+// campos perderían el foco si alguien los usara como JSX.
+const FieldError = ({ name, error }) => (error ? <p id={`${name}-error`} className={errorClass}>{error}</p> : null);
+
+// Campo numérico con la unidad dentro del input
+const NumberWithUnit = ({ name, label, unit, step, placeholder, value, error, onChange, disabled }) => (
+    <div>
+        <label htmlFor={name} className={labelClass}>{label}</label>
+        <div className="relative">
+            <input
+                id={name}
+                name={name}
+                type="number"
+                inputMode="decimal"
+                step={step}
+                placeholder={placeholder}
+                value={value}
+                onChange={onChange}
+                disabled={disabled}
+                aria-invalid={Boolean(error)}
+                aria-describedby={error ? `${name}-error` : undefined}
+                className={`${inputClass(Boolean(error))} pr-12 tabular-nums`}
+            />
+            <span className="pointer-events-none absolute inset-y-0 right-0 mt-1 flex items-center pr-3 text-sm text-slate-500">{unit}</span>
+        </div>
+        <FieldError name={name} error={error} />
+    </div>
+);
+
 const AltaPaciente = ({ loggedInUser }) => {
     const { nss } = useParams(); // Obtenemos el NSS de la URL si existe
     const isEditMode = !!nss; // Si hay NSS, estamos editando
 
     const [pacienteData, setPacienteData] = useState(initialPacienteState);
     const [errors, setErrors] = useState({});
-    const [statusMessage, setStatusMessage] = useState('');
+    const [loadError, setLoadError] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     // Lógica de solo lectura: si es médico especialista y está en modo edición.
@@ -42,18 +94,15 @@ const AltaPaciente = ({ loggedInUser }) => {
                 try {
                     const response = await apiClient.get(`/pacientes/${nss}`);
                     setPacienteData(response.data);
-                    // Solo mostrar el mensaje de "Editando" si no estamos en modo de solo lectura.
-                    if (!isReadOnly) {
-                        setStatusMessage(`📝 Editando registro de ${response.data.nombre}.`);
-                    }
+                    setLoadError('');
                 } catch (error) {
                     console.error("Error al cargar paciente:", error);
-                    setStatusMessage('❌ No se pudieron cargar los datos del paciente.');
+                    setLoadError('No se pudieron cargar los datos del paciente.');
                 }
             } else {
                 // Si no hay nss, asegura que el formulario esté vacío para un nuevo registro
                 setPacienteData(initialPacienteState);
-                setStatusMessage('');
+                setLoadError('');
                 setErrors({});
             }
         };
@@ -72,6 +121,8 @@ const AltaPaciente = ({ loggedInUser }) => {
         } else if (name === 'edad') {
             const val = parseInt(value);
             if (isNaN(val) || val < 0 || val > 120) error = 'La edad debe estar entre 0 y 120 años.';
+        } else if ((name === 'nombre' || name === 'nss') && !String(value).trim()) {
+            error = name === 'nombre' ? 'Escribe el nombre del paciente.' : 'Escribe el NSS del paciente.';
         }
 
         setErrors(prev => ({ ...prev, [name]: error }));
@@ -99,15 +150,13 @@ const AltaPaciente = ({ loggedInUser }) => {
         });
 
         // Validar el campo que acaba de cambiar
-        if (type === 'number') {
+        if (type === 'number' || errors[name]) {
             validateField(name, value);
         }
     };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        setStatusMessage('');
-        setIsSubmitting(true);
 
         // Validación final antes de enviar
         const finalErrors = {};
@@ -116,205 +165,171 @@ const AltaPaciente = ({ loggedInUser }) => {
             if (error) finalErrors[key] = error;
         });
 
-        if (Object.values(errors).some(error => error !== null) || Object.keys(finalErrors).length > 0) {
-            setStatusMessage('⚠️ Por favor, corrija los errores marcados en el formulario.');
-            setIsSubmitting(false);
+        if (Object.keys(finalErrors).length > 0) {
+            toast.error('Revisa los campos marcados.');
+            document.getElementById(Object.keys(finalErrors)[0])?.focus();
             return;
         }
 
-        if (!pacienteData.nombre || !pacienteData.nss) {
-            setStatusMessage('⚠️ Por favor, complete al menos Nombre y NSS.');
-            setIsSubmitting(false);
-            return;
-        }
-
+        setIsSubmitting(true);
         try {
             // Llamada a la API para guardar o actualizar usando apiClient
             await apiClient.post('/pacientes', pacienteData);
 
-            const successMessage = isEditMode
-                ? `✅ Paciente ${pacienteData.nombre} actualizado con éxito.`
-                : `✅ Nuevo paciente ${pacienteData.nombre} registrado con éxito.`;
-
-            setStatusMessage(successMessage);
+            toast.success(isEditMode
+                ? `Paciente actualizado: ${pacienteData.nombre} ${pacienteData.apellidoP}`
+                : `Paciente registrado: ${pacienteData.nombre} ${pacienteData.apellidoP}`);
             if (!isEditMode) {
                 setPacienteData(initialPacienteState); // Limpiar formulario solo en modo creación
+                setErrors({});
             }
         } catch (error) {
-            setStatusMessage(`❌ Error al guardar el paciente: ${error.response?.data?.message || error.message}`);
+            toast.error(error.response?.data?.message || 'No se pudo guardar el paciente.');
         } finally {
             setIsSubmitting(false);
         }
     };
 
-    // Función helper simplificada para actualizar estilo de inputs deshabilitados
-    const inputStyle = (hasError) => `w-full p-3 mb-1 bg-gray-200 rounded-lg border ${hasError ? 'border-red-500' : 'border-transparent'} focus:ring-2 ${hasError ? 'focus:ring-red-500' : 'focus:ring-blue-500'} focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed`;
-    const cardStyle = "p-6 bg-gray-100 rounded-xl shadow-md";
-    const titleStyle = "text-xl font-semibold mb-4 text-gray-800";
-    const labelStyle = "block text-sm font-medium text-gray-700 mb-1";
-
+    const disabled = isReadOnly || isSubmitting;
+    const fieldProps = (name) => ({
+        id: name,
+        name,
+        onChange: handleChange,
+        disabled,
+        'aria-invalid': Boolean(errors[name]),
+        'aria-describedby': errors[name] ? `${name}-error` : undefined,
+    });
+    const imcInfo = clasificarIMC(pacienteData.imc);
+    const title = isReadOnly ? 'Expediente del paciente' : isEditMode ? 'Editar paciente' : 'Registrar paciente';
+    const checkboxes = [
+        { name: 'diabetes', label: 'Diabetes' },
+        { name: 'hipertension', label: 'Hipertensión' },
+        { name: 'enfcronica', label: 'Enfermedad crónica conocida' },
+    ];
 
     return (
-        <div className="p-8">
-            <h1 className="text-3xl font-bold mb-8 text-gray-800">
-                {isReadOnly
-                    ? 'Expediente del Paciente (Solo Lectura)'
-                    : isEditMode ? 'Editar Paciente' : 'Alta de Paciente'}
-            </h1>
-
-            {statusMessage && (
-                <div className={`p-4 mb-6 rounded-md font-medium ${statusMessage.startsWith('✅') ? 'bg-green-100 text-green-700' :
-                    statusMessage.startsWith('⚠️') ? 'bg-yellow-100 text-yellow-800' :
-                        'bg-red-100 text-red-700'
-                    }`}>
-                    {statusMessage}
+        <div className="mx-auto w-full max-w-6xl px-2 py-4 sm:px-4">
+            <header className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                    <h1 className={pageTitleClass}>{title}</h1>
+                    <p className="mt-1 text-sm text-slate-600">
+                        {isReadOnly
+                            ? 'Consulta los datos del paciente. Solo el personal de atención puede modificarlos.'
+                            : isEditMode
+                                ? `Actualiza el registro de ${pacienteData.nombre || 'este paciente'}.`
+                                : 'Captura los datos generales y el historial clínico del paciente.'}
+                    </p>
                 </div>
+                {isReadOnly && (
+                    <span className="inline-flex items-center gap-1.5 self-start rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600">
+                        <LockClosedIcon className="h-4 w-4" /> Solo lectura
+                    </span>
+                )}
+            </header>
+
+            {loadError && (
+                <p className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{loadError}</p>
             )}
 
-            <form onSubmit={handleSubmit} className="flex space-x-8">
-
-                {/* COLUMNA IZQUIERDA: Datos Personales (50% de ancho) */}
-                <div className="w-1/2 space-y-6">
-
-                    {/* Tarjeta 1: Información Básica */}
-                    <div className={cardStyle}>
-                        <h2 className={titleStyle}>Información Personal</h2>
-                        <div className="mb-3">
-                            <label className={labelStyle}>Nombre</label>
-                            <input type="text" name="nombre" placeholder="Nombre" value={pacienteData.nombre} onChange={handleChange} className={inputStyle(errors.nombre)} required disabled={isReadOnly || isSubmitting} />
-                        </div>
-                        <div className="mb-3">
-                            <label className={labelStyle}>Apellido Paterno</label>
-                            <input type="text" name="apellidoP" placeholder="Apellido Paterno" value={pacienteData.apellidoP} onChange={handleChange} className={inputStyle(errors.apellidoP)} required disabled={isReadOnly || isSubmitting} />
-                        </div>
-                        <div className="mb-3">
-                            <label className={labelStyle}>Apellido Materno</label>
-                            <input type="text" name="apellidoM" placeholder="Apellido Materno" value={pacienteData.apellidoM} onChange={handleChange} className={inputStyle(errors.apellidoM)} disabled={isReadOnly || isSubmitting} />
-                        </div>
-                        <div className="mb-3">
-                            <label className={labelStyle}>NSS (Número de Seguridad Social)</label>
-                            <input type="text" name="nss" placeholder="NSS" value={pacienteData.nss} onChange={handleChange} className={inputStyle(errors.nss)} required disabled={isReadOnly || isSubmitting} />
-                        </div>
-                    </div>
-
-                    {/* Tarjeta 2: Info Médica Básica */}
-                    <div className={cardStyle}>
-                        <h2 className={titleStyle}>Info Médica Básica</h2>
-
-                        <div className="mb-4">
-                            <label className={labelStyle}>Tipo de Sangre</label>
-                            <select name="tiposangre" value={pacienteData.tiposangre} onChange={handleChange} className={inputStyle(errors.tiposangre)} disabled={isReadOnly || isSubmitting}>
-                                <option value="">Seleccionar tipo</option>
-                                <option value="A+">A+</option>
-                                <option value="O-">O-</option>
-                                <option value="A-">A-</option>
-                                <option value="O+">O+</option>
-                                <option value="B+">B+</option>
-                                <option value="B-">B-</option>
-                                <option value="AB+">AB+</option>
-                                <option value="AB-">AB-</option>
-                            </select>
-                        </div>
-
-                        {/* Campo de Edad con unidad visible */}
-                        <div className="mb-4">
-                            <label htmlFor="edad" className={labelStyle}>Edad</label>
-                            <div className={`flex items-center bg-gray-200 rounded-lg focus-within:ring-2 ${errors.edad ? 'ring-2 ring-red-500' : 'focus-within:ring-blue-500'}`}>
-                                <input id="edad" type="number" name="edad" placeholder="0" value={pacienteData.edad} onChange={handleChange} className="w-full p-3 bg-transparent border-none focus:outline-none disabled:bg-gray-200" required disabled={isReadOnly || isSubmitting} />
-                                <span className="pr-3 text-gray-500">años</span>
+            <form onSubmit={handleSubmit} noValidate className="grid gap-6 lg:grid-cols-2">
+                <div className="space-y-6">
+                    <section className={`${cardClass} p-6`}>
+                        <h2 className={cardTitleClass}>Datos personales</h2>
+                        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                            <div className="sm:col-span-2">
+                                <label htmlFor="nombre" className={labelClass}>Nombre</label>
+                                <input {...fieldProps('nombre')} type="text" autoComplete="off" value={pacienteData.nombre} className={inputClass(Boolean(errors.nombre))} />
+                                <FieldError name="nombre" error={errors.nombre} />
                             </div>
-                            {errors.edad && <p className="text-red-500 text-xs mt-1">{errors.edad}</p>}
-                        </div>
-
-                        {/* Campo de Estatura con unidad visible */}
-                        <div className="mb-4">
-                            <label htmlFor="estatura" className={labelStyle}>Estatura</label>
-                            <div className={`flex items-center bg-gray-200 rounded-lg focus-within:ring-2 ${errors.estatura ? 'ring-2 ring-red-500' : 'focus-within:ring-blue-500'}`}>
-                                <input id="estatura" type="number" name="estatura" placeholder="0.00" value={pacienteData.estatura} onChange={handleChange} className="w-full p-3 bg-transparent border-none focus:outline-none disabled:bg-gray-200" step="0.01" required disabled={isReadOnly || isSubmitting} />
-                                <span className="pr-3 text-gray-500">m</span>
+                            <div>
+                                <label htmlFor="apellidoP" className={labelClass}>Apellido paterno</label>
+                                <input {...fieldProps('apellidoP')} type="text" autoComplete="off" value={pacienteData.apellidoP} className={inputClass(false)} />
                             </div>
-                            {errors.estatura && <p className="text-red-500 text-xs mt-1">{errors.estatura}</p>}
-                        </div>
-
-                        {/* Campo de Peso con unidad visible */}
-                        <div className="mb-4">
-                            <label htmlFor="peso" className={labelStyle}>Peso</label>
-                            <div className={`flex items-center bg-gray-200 rounded-lg focus-within:ring-2 ${errors.peso ? 'ring-2 ring-red-500' : 'focus-within:ring-blue-500'}`}>
-                                <input id="peso" type="number" name="peso" placeholder="0.0" value={pacienteData.peso} onChange={handleChange} className="w-full p-3 bg-transparent border-none focus:outline-none disabled:bg-gray-200" step="0.1" required disabled={isReadOnly || isSubmitting} />
-                                <span className="pr-3 text-gray-500">kg</span>
+                            <div>
+                                <label htmlFor="apellidoM" className={labelClass}>Apellido materno</label>
+                                <input {...fieldProps('apellidoM')} type="text" autoComplete="off" value={pacienteData.apellidoM} className={inputClass(false)} />
                             </div>
-                            {errors.peso && <p className="text-red-500 text-xs mt-1">{errors.peso}</p>}
+                            <div className="sm:col-span-2">
+                                <label htmlFor="nss" className={labelClass}>NSS (Número de Seguridad Social)</label>
+                                <input {...fieldProps('nss')} type="text" inputMode="numeric" autoComplete="off" value={pacienteData.nss} className={`${inputClass(Boolean(errors.nss))} font-mono tabular-nums`} />
+                                <FieldError name="nss" error={errors.nss} />
+                            </div>
                         </div>
+                    </section>
 
-                        <div className={`p-3 rounded-lg font-semibold text-center ${(pacienteData.imc < 18.5 || pacienteData.imc > 30) && pacienteData.imc > 0
-                            ? 'bg-yellow-100 text-yellow-800'
-                            : 'bg-blue-100 text-blue-800'
-                            }`}>
-                            IMC Calculado: {pacienteData.imc}
+                    <section className={`${cardClass} p-6`}>
+                        <h2 className={cardTitleClass}>Datos médicos básicos</h2>
+                        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                            <div>
+                                <label htmlFor="tiposangre" className={labelClass}>Tipo de sangre</label>
+                                <select {...fieldProps('tiposangre')} value={pacienteData.tiposangre} className={inputClass(false)}>
+                                    <option value="">Sin especificar</option>
+                                    {TIPOS_SANGRE.map((t) => <option key={t} value={t}>{t}</option>)}
+                                </select>
+                            </div>
+                            <NumberWithUnit name="edad" label="Edad" unit="años" step="1" placeholder="0" value={pacienteData.edad} error={errors.edad} onChange={handleChange} disabled={disabled} />
+                            <NumberWithUnit name="estatura" label="Estatura" unit="m" step="0.01" placeholder="0.00" value={pacienteData.estatura} error={errors.estatura} onChange={handleChange} disabled={disabled} />
+                            <NumberWithUnit name="peso" label="Peso" unit="kg" step="0.1" placeholder="0.0" value={pacienteData.peso} error={errors.peso} onChange={handleChange} disabled={disabled} />
                         </div>
-                    </div>
-
-                    {/* Botón de Registro */}
-                    <button
-                        type="submit"
-                        className={`w-full p-4  text-white font-bold rounded-lg transition duration-200 shadow-md ${(isReadOnly || isSubmitting) ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-500 hover:bg-blue-600'
-                            }`}
-                        disabled={isReadOnly || isSubmitting}
-                    >
-                        {isReadOnly ? 'Solo Lectura' :
-                            isSubmitting ? 'Guardando...' :
-                                isEditMode ? 'Actualizar Paciente' : 'Registrar Paciente'}
-                    </button>
+                        <div
+                            className={`mt-4 flex items-center justify-between rounded-xl border px-4 py-3 text-sm ${imcInfo ? imcInfo.tone : 'border-slate-200 bg-slate-50 text-slate-600'}`}
+                            aria-live="polite"
+                        >
+                            <span>Índice de masa corporal</span>
+                            <span className="font-semibold tabular-nums">
+                                {imcInfo ? `${pacienteData.imc} · ${imcInfo.label}` : 'Captura peso y estatura'}
+                            </span>
+                        </div>
+                    </section>
                 </div>
 
-                {/* COLUMNA DERECHA: Padecimientos y Historial (50% de ancho) */}
-                <div className="w-1/2 space-y-6">
-
-                    {/* Tarjeta 3: Enfermedades y Condiciones */}
-                    <div className={cardStyle}>
-                        <h2 className={titleStyle}>Enfermedades y Condiciones</h2>
-
-                        {/* Checkbox para Diabetes */}
-                        <label className="flex items-center space-x-2 mb-3 cursor-pointer">
-                            <input type="checkbox" name="diabetes" checked={pacienteData.diabetes} onChange={handleChange} className="form-checkbox h-5 w-5 text-blue-500 rounded disabled:opacity-70" disabled={isReadOnly || isSubmitting} />
-                            <span className="text-gray-700">Diabetes</span>
-                        </label>
-
-                        {/* Checkbox para Hipertensión */}
-                        <label className="flex items-center space-x-2 mb-3 cursor-pointer">
-                            <input type="checkbox" name="hipertension" checked={pacienteData.hipertension} onChange={handleChange} className="form-checkbox h-5 w-5 text-blue-500 rounded disabled:opacity-70" disabled={isReadOnly || isSubmitting} />
-                            <span className="text-gray-700">Hipertensión</span>
-                        </label>
-
-                        {/* Checkbox para Enfermedad Crónica Conocida */}
-                        <label className="flex items-center space-x-2 mb-3 cursor-pointer">
-                            <input type="checkbox" name="enfcronica" checked={pacienteData.enfcronica} onChange={handleChange} className="form-checkbox h-5 w-5 text-blue-500 rounded disabled:opacity-70" disabled={isReadOnly || isSubmitting} />
-                            <span className="text-gray-700">Enfermedad Crónica Conocida</span>
-                        </label>
-
-                    </div>
-
-                    {/* Tarjeta 4: Historial Clínico (Textareas) */}
-                    <div className={cardStyle}>
-                        <h2 className={titleStyle}>Historial Clínico</h2>
-
-                        <div className="mb-4">
-                            <label htmlFor="antecedentes" className={labelStyle}>Antecedentes Familiares/Personales</label>
-                            <textarea id="antecedentes" name="antecedentes" placeholder="Ej: Padre con hipertensión..." value={pacienteData.antecedentes} onChange={handleChange} className={inputStyle(errors.antecedentes)} rows="3" disabled={isReadOnly || isSubmitting} />
+                <div className="space-y-6">
+                    <section className={`${cardClass} p-6`}>
+                        <h2 className={cardTitleClass}>Enfermedades y condiciones</h2>
+                        <div className="mt-4 grid gap-2">
+                            {checkboxes.map(({ name, label }) => (
+                                <label key={name} htmlFor={name} className="flex cursor-pointer items-center gap-3 rounded-lg px-1 py-1.5 text-sm text-slate-700">
+                                    <input
+                                        id={name}
+                                        type="checkbox"
+                                        name={name}
+                                        checked={Boolean(pacienteData[name])}
+                                        onChange={handleChange}
+                                        disabled={disabled}
+                                        className="h-4 w-4 rounded border-slate-300 accent-blue-900 disabled:opacity-60"
+                                    />
+                                    {label}
+                                </label>
+                            ))}
                         </div>
+                    </section>
 
-                        <div className="mb-4">
-                            <label htmlFor="sintomascla" className={labelStyle}>Síntomas Clave</label>
-                            <textarea id="sintomascla" name="sintomascla" placeholder="Ej: Dolor torácico persistente..." value={pacienteData.sintomascla} onChange={handleChange} className={inputStyle(errors.sintomascla)} rows="3" disabled={isReadOnly || isSubmitting} />
+                    <section className={`${cardClass} p-6`}>
+                        <h2 className={cardTitleClass}>Historial clínico</h2>
+                        <div className="mt-4 space-y-4">
+                            <div>
+                                <label htmlFor="antecedentes" className={labelClass}>Antecedentes familiares y personales</label>
+                                <textarea {...fieldProps('antecedentes')} rows="3" placeholder="Ej.: padre con hipertensión" value={pacienteData.antecedentes} className={`${inputClass(false)} resize-y`} />
+                            </div>
+                            <div>
+                                <label htmlFor="sintomascla" className={labelClass}>Síntomas clave</label>
+                                <textarea {...fieldProps('sintomascla')} rows="3" placeholder="Ej.: dolor torácico persistente" value={pacienteData.sintomascla} className={`${inputClass(false)} resize-y`} />
+                            </div>
+                            <div>
+                                <label htmlFor="medicamentos" className={labelClass}>Medicamentos actuales</label>
+                                <textarea {...fieldProps('medicamentos')} rows="3" placeholder="Ej.: metformina 500 mg/día" value={pacienteData.medicamentos} className={`${inputClass(false)} resize-y`} />
+                            </div>
                         </div>
-
-                        <div className="mb-4">
-                            <label htmlFor="medicamentos" className={labelStyle}>Medicamentos Actuales</label>
-                            <textarea id="medicamentos" name="medicamentos" placeholder="Ej: Metformina 500mg/día..." value={pacienteData.medicamentos} onChange={handleChange} className={inputStyle(errors.medicamentos)} rows="3" disabled={isReadOnly || isSubmitting} />
-                        </div>
-                    </div>
-
+                    </section>
                 </div>
+
+                {!isReadOnly && (
+                    <div className="flex justify-end lg:col-span-2">
+                        <button type="submit" disabled={isSubmitting} className={primaryButton}>
+                            {isSubmitting ? 'Guardando…' : isEditMode ? 'Guardar cambios' : 'Registrar paciente'}
+                        </button>
+                    </div>
+                )}
             </form>
         </div>
     );

@@ -1,44 +1,58 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import axios from 'axios';
+import toast from 'react-hot-toast';
+import { MagnifyingGlassIcon, PlusIcon } from '@heroicons/react/24/outline';
+import apiClient from '../api/axiosConfig';
 import useDebounce from '../hooks/useDebounce';
+import {
+    cardClass,
+    dangerButton,
+    inputClass,
+    labelClass,
+    pageTitleClass,
+    primaryButton,
+    secondaryButton,
+} from '../components/ui/formStyles';
 
-const API_URL = 'http://localhost:3001/api';
-
-const ConfirmationModal = ({ paciente, onConfirm, onCancel }) => {
+const ConfirmationModal = ({ paciente, onConfirm, onCancel, isDeleting }) => {
     const [confirmNSS, setConfirmNSS] = useState('');
-    const isMatch = confirmNSS === paciente.nss;
+    const isMatch = confirmNSS.trim() === String(paciente.nss);
 
     return (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center">
-            <div className="relative mx-auto p-8 border w-full max-w-md shadow-lg rounded-xl bg-white">
-                <h3 className="text-2xl font-bold text-red-700">Confirmación de Eliminación</h3>
-                <div className="mt-4 space-y-4 text-gray-700">
-                    <p>Estás a punto de eliminar permanentemente al paciente:</p>
-                    <p className="font-semibold text-lg">{paciente.nombre} {paciente.apellidoP} (NSS: {paciente.nss})</p>
-                    <p className="font-bold text-red-600">¡Esta acción es irreversible!</p>
-                    <p>Se borrarán todos los datos del paciente, incluyendo su historial de casos clínicos y todos los archivos de imagen asociados.</p>
-                    <hr/>
-                    <label htmlFor="confirmNSS" className="font-semibold">Para confirmar, por favor escribe el NSS del paciente:</label>
+        <div
+            className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-900/40 p-4 backdrop-blur-sm"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="eliminar-paciente-titulo"
+        >
+            <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+                <h2 id="eliminar-paciente-titulo" className="text-lg font-semibold text-slate-900">
+                    ¿Eliminar a {paciente.nombre} {paciente.apellidoP}?
+                </h2>
+                <p className="mt-2 text-sm text-slate-600">
+                    Se borrarán sus datos, sus casos clínicos y todas las imágenes asociadas. Esta acción no se puede deshacer.
+                </p>
+                <div className="mt-4">
+                    <label htmlFor="confirmNSS" className={labelClass}>
+                        Escribe el NSS <span className="font-mono">{paciente.nss}</span> para confirmar
+                    </label>
                     <input
                         id="confirmNSS"
                         type="text"
+                        inputMode="numeric"
+                        autoComplete="off"
+                        autoFocus
                         value={confirmNSS}
                         onChange={(e) => setConfirmNSS(e.target.value)}
-                        className="w-full p-2 border border-gray-300 rounded-md"
-                        placeholder={paciente.nss}
+                        className={inputClass(false)}
                     />
                 </div>
-                <div className="mt-6 flex justify-end space-x-4">
-                    <button onClick={onCancel} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300">
+                <div className="mt-6 flex justify-end gap-3">
+                    <button onClick={onCancel} disabled={isDeleting} className={secondaryButton}>
                         Cancelar
                     </button>
-                    <button
-                        onClick={onConfirm}
-                        disabled={!isMatch}
-                        className="px-4 py-2 bg-red-600 text-white font-semibold rounded-lg hover:bg-red-700 disabled:bg-red-300 disabled:cursor-not-allowed"
-                    >
-                        Eliminar Definitivamente
+                    <button onClick={onConfirm} disabled={!isMatch || isDeleting} className={dangerButton}>
+                        {isDeleting ? 'Eliminando…' : 'Eliminar paciente'}
                     </button>
                 </div>
             </div>
@@ -50,117 +64,146 @@ const GestionPacientes = () => {
     const [pacientes, setPacientes] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
-    const [statusMessage, setStatusMessage] = useState('');
     const [searchTerm, setSearchTerm] = useState('');
     const [pacienteToDelete, setPacienteToDelete] = useState(null);
+    const [isDeleting, setIsDeleting] = useState(false);
 
     const debouncedSearchTerm = useDebounce(searchTerm, 300);
 
-    // La función ahora puede recibir un término de búsqueda
-    const fetchPacientes = async (searchQuery = '') => {
+    // Cada búsqueda recibe un número; solo la más reciente actualiza la tabla. Así una
+    // respuesta lenta de una búsqueda anterior no pisa los resultados de la actual.
+    const latestRequest = useRef(0);
+    const fetchPacientes = useCallback(async (searchQuery = '') => {
+        const requestId = ++latestRequest.current;
         setLoading(true);
-        const requestUrl = `${API_URL}/pacientes/search?q=${searchQuery}`;
-
         try {
-            const response = await axios.get(requestUrl);
+            const response = await apiClient.get('/pacientes/search', { params: { q: searchQuery } });
+            if (requestId !== latestRequest.current) return;
             setPacientes(response.data);
             setError('');
-        } catch (err) {
-            setError('No se pudieron cargar los pacientes.');
+        } catch {
+            if (requestId !== latestRequest.current) return;
+            setError('No se pudieron cargar los pacientes. Revisa tu conexión e inténtalo de nuevo.');
             setPacientes([]); // En caso de error, vaciamos la lista para evitar mostrar datos viejos
         } finally {
-            setLoading(false);
+            if (requestId === latestRequest.current) setLoading(false);
         }
-    };
+    }, []);
 
-    // Este efecto se ejecuta cuando el término de búsqueda (con debounce) cambia
-    // y también en la carga inicial.
+    // Se ejecuta en la carga inicial y cada vez que cambia la búsqueda (con debounce)
     useEffect(() => {
         fetchPacientes(debouncedSearchTerm);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [debouncedSearchTerm]); // La dependencia es correcta, deshabilitamos el lint para esta línea.
-
+    }, [debouncedSearchTerm, fetchPacientes]);
 
     const handleDelete = async () => {
         if (!pacienteToDelete) return;
-
+        setIsDeleting(true);
         try {
-            setStatusMessage(`⏳ Eliminando a ${pacienteToDelete.nombre}...`);
-            await axios.delete(`${API_URL}/pacientes/${pacienteToDelete.nss}`);
-            setStatusMessage(`✅ Paciente ${pacienteToDelete.nombre} y todos sus datos han sido eliminados.`);
+            await apiClient.delete(`/pacientes/${pacienteToDelete.nss}`);
+            toast.success(`Paciente eliminado: ${pacienteToDelete.nombre} ${pacienteToDelete.apellidoP}`);
             setPacienteToDelete(null);
-            fetchPacientes(searchTerm); // Recargar la lista de pacientes manteniendo el filtro actual
+            fetchPacientes(searchTerm); // Recargar la lista manteniendo el filtro actual
         } catch (err) {
-            setStatusMessage(`❌ Error al eliminar al paciente: ${err.response?.data?.message || err.message}`);
             console.error(err);
+            toast.error(err.response?.data?.message || 'No se pudo eliminar al paciente.');
             setPacienteToDelete(null);
+        } finally {
+            setIsDeleting(false);
         }
     };
 
-    if (loading) return <div className="p-8">Cargando pacientes...</div>;
-    if (error) return <div className="p-8 text-red-500">{error}</div>;
+    const thClass = 'px-5 py-3 text-left text-xs font-medium text-slate-500';
 
     return (
-        <div className="p-8">
+        <div className="mx-auto w-full max-w-6xl px-2 py-4 sm:px-4">
             {pacienteToDelete && (
                 <ConfirmationModal
                     paciente={pacienteToDelete}
                     onConfirm={handleDelete}
                     onCancel={() => setPacienteToDelete(null)}
+                    isDeleting={isDeleting}
                 />
             )}
 
-            <div className="flex justify-between items-center mb-6">
-                <h1 className="text-3xl font-bold text-gray-800">Gestión de Pacientes</h1>
-                <Link to="/app/alta-paciente" className="px-4 py-2 bg-blue-500 text-white font-semibold rounded-lg hover:bg-blue-600 transition">
-                    + Registrar Nuevo Paciente
-                </Link>
-            </div>
-
-            {statusMessage && (
-                <div className={`p-4 mb-6 rounded-md font-medium ${statusMessage.startsWith('✅') ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
-                    {statusMessage}
+            <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                    <h1 className={pageTitleClass}>Pacientes</h1>
+                    <p className="mt-1 text-sm text-slate-600">Busca, edita o registra pacientes.</p>
                 </div>
-            )}
+                <Link to="/app/alta-paciente" className={primaryButton}>
+                    <PlusIcon className="h-4 w-4" />
+                    Registrar paciente
+                </Link>
+            </header>
 
-            <div className="mb-6">
+            {/* La búsqueda permanece montada mientras carga para no perder el foco */}
+            <div className="relative mb-4">
+                <label htmlFor="buscar-paciente" className="sr-only">Buscar pacientes</label>
+                <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 mt-0.5 h-5 w-5 -translate-y-1/2 text-slate-400" />
                 <input
-                    type="text"
-                    placeholder="Buscar por nombre, apellido o NSS..."
+                    id="buscar-paciente"
+                    type="search"
+                    placeholder="Buscar por nombre, apellido o NSS"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    className="w-full p-3 bg-white border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    className={`${inputClass(false)} pl-10`}
                 />
             </div>
 
-            <div className="bg-white shadow-md rounded-lg overflow-hidden">
-                <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                        <tr>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nombre Completo</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">NSS</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Edad</th>
-                            <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Acciones</th>
-                        </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                        {pacientes.map((paciente) => (
-                            <tr key={paciente.nss} className="hover:bg-gray-50">
-                                <td className="px-6 py-4 whitespace-nowrap font-medium text-gray-900">{paciente.nombre} {paciente.apellidoP} {paciente.apellidoM}</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-gray-500">{paciente.nss}</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-gray-500">{paciente.edad}</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
-                                    <Link to={`/app/alta-paciente/${paciente.nss}`} className="text-blue-600 hover:text-blue-900">Editar</Link>
-                                    <button onClick={() => setPacienteToDelete(paciente)} className="text-red-600 hover:text-red-900">
-                                        Eliminar
-                                    </button>
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-                {pacientes.length === 0 && !loading && (
-                    <p className="text-center py-8 text-gray-500">No se encontraron pacientes.</p>
+            <div className={`${cardClass} overflow-hidden`}>
+                {error ? (
+                    <p className="px-5 py-8 text-center text-sm text-red-700">{error}</p>
+                ) : (
+                    <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-slate-200" aria-busy={loading}>
+                            <thead className="bg-slate-50">
+                                <tr>
+                                    <th scope="col" className={thClass}>Nombre</th>
+                                    <th scope="col" className={thClass}>NSS</th>
+                                    <th scope="col" className={thClass}>Edad</th>
+                                    <th scope="col" className={`${thClass} text-right`}><span className="sr-only">Acciones</span></th>
+                                </tr>
+                            </thead>
+                            <tbody className={`divide-y divide-slate-100 transition-opacity duration-150 ${loading ? 'opacity-50' : ''}`}>
+                                {pacientes.map((paciente) => (
+                                    <tr key={paciente.nss} className="hover:bg-slate-50">
+                                        <td className="whitespace-nowrap px-5 py-3 text-sm font-medium text-slate-900">
+                                            {paciente.nombre} {paciente.apellidoP} {paciente.apellidoM}
+                                        </td>
+                                        <td className="whitespace-nowrap px-5 py-3 font-mono text-sm tabular-nums text-slate-600">{paciente.nss}</td>
+                                        <td className="whitespace-nowrap px-5 py-3 text-sm tabular-nums text-slate-600">{paciente.edad}</td>
+                                        <td className="whitespace-nowrap px-5 py-3 text-right text-sm font-medium">
+                                            <Link
+                                                to={`/app/alta-paciente/${paciente.nss}`}
+                                                className="rounded-md px-2 py-1 text-blue-900 hover:bg-blue-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-900/40"
+                                            >
+                                                Editar
+                                            </Link>
+                                            <button
+                                                onClick={() => setPacienteToDelete(paciente)}
+                                                className="ml-1 rounded-md px-2 py-1 text-red-700 hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-700/40"
+                                            >
+                                                Eliminar
+                                            </button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                        {!loading && pacientes.length === 0 && (
+                            <div className="px-5 py-10 text-center">
+                                <p className="text-sm font-medium text-slate-900">
+                                    {searchTerm ? `Ningún paciente coincide con “${searchTerm}”.` : 'Todavía no hay pacientes registrados.'}
+                                </p>
+                                <p className="mt-1 text-sm text-slate-500">
+                                    {searchTerm ? 'Revisa el nombre o el NSS.' : 'Registra el primero para poder enviar sus estudios.'}
+                                </p>
+                            </div>
+                        )}
+                        {loading && pacientes.length === 0 && (
+                            <p className="px-5 py-10 text-center text-sm text-slate-500">Cargando pacientes…</p>
+                        )}
+                    </div>
                 )}
             </div>
         </div>

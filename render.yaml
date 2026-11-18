@@ -16,6 +16,9 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+      # Secreto compartido backend <-> IA: Render lo genera aquí y el backend lo lee de este servicio
+      - key: IA_SERVICE_TOKEN
+        generateValue: true
       - key: FIREBASE_PRIVATE_KEY
         sync: false
       - key: FIREBASE_CLIENT_EMAIL
@@ -47,6 +50,11 @@ services:
           type: web
           name: radiodiagnostico-ia
           property: host
+      - key: IA_SERVICE_TOKEN
+        fromService:
+          type: web
+          name: radiodiagnostico-ia
+          envVarKey: IA_SERVICE_TOKEN
       - key: FIREBASE_PRIVATE_KEY
         sync: false
       - key: FIREBASE_CLIENT_EMAIL

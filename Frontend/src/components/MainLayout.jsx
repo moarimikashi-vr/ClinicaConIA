@@ -1,23 +1,85 @@
-import React, { useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import React, { useCallback, useEffect, useState } from 'react';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import {
+    ArrowRightStartOnRectangleIcon,
+    ArrowUpTrayIcon,
+    ChevronDoubleLeftIcon,
+    ChevronDoubleRightIcon,
+    HomeIcon,
+    UserPlusIcon,
+    UsersIcon,
+} from '@heroicons/react/24/outline';
 import logo from '../assets/logo-tecnm.png';
 import NotificationBox from './NotificationBox';
 import { useAuth } from '../context/AuthContext';
 
-// Iconos para la barra lateral
-const HomeIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>;
-const UserPlusIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" /></svg>;
-const PatientPlusIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M15 21a6 6 0 00-9-5.197m0 0A5.975 5.975 0 003 15" /></svg>;
-const PatientListIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.653-.124-1.28-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.653.124-.1.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>;
-const FileUploadIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-4-4V7a4 4 0 014-4h1.586a1 1 0 01.707.293l1.414 1.414a1 1 0 00.707.293H13a4 4 0 014 4v1.586a1 1 0 01-.293.707l-1.414 1.414a1 1 0 00-.293.707V16a4 4 0 01-4 4H7z" /></svg>;
-const LogoutIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>;
+const STORAGE_KEY = 'ui.sidebarCollapsed';
+
+// Preferencia guardada; sin preferencia, colapsada en pantallas angostas.
+const readCollapsedPreference = () => {
+    try {
+        const stored = localStorage.getItem(STORAGE_KEY);
+        if (stored !== null) return stored === 'true';
+    } catch {
+        // Almacenamiento no disponible: se usa el valor por defecto
+    }
+    try {
+        return typeof window.matchMedia === 'function' && !window.matchMedia('(min-width: 768px)').matches;
+    } catch {
+        return false;
+    }
+};
+
+const ROLE_LABELS = {
+    administrador: 'Administrador',
+    medico: 'Médico especialista',
+    atencion: 'Personal de atención',
+};
 
 const MainLayout = ({ userRole, onLogout }) => {
     const { user } = useAuth();
     const [isLoggingOut, setIsLoggingOut] = useState(false);
+    const [collapsedPreference, setCollapsedPreference] = useState(readCollapsedPreference);
+    // En el visor la barra arranca colapsada sin tocar la preferencia del resto de vistas
+    const [expandedInViewer, setExpandedInViewer] = useState(false);
     const navigate = useNavigate();
-    const linkStyle = "flex items-center p-3 my-1 text-gray-700 rounded-lg hover:bg-blue-100 transition-colors duration-200";
-    const activeLinkStyle = "bg-blue-900 text-white shadow-md";
+    const { pathname } = useLocation();
+    const isViewer = pathname.startsWith('/app/viewer');
+    const collapsed = isViewer ? !expandedInViewer : collapsedPreference;
+
+    useEffect(() => {
+        if (!isViewer) setExpandedInViewer(false);
+    }, [isViewer]);
+
+    const toggleSidebar = useCallback(() => {
+        if (isViewer) {
+            setExpandedInViewer((v) => !v);
+            return;
+        }
+        setCollapsedPreference((v) => {
+            try {
+                localStorage.setItem(STORAGE_KEY, String(!v));
+            } catch {
+                // Sin almacenamiento la preferencia dura solo esta sesión
+            }
+            return !v;
+        });
+    }, [isViewer]);
+
+    // Atajo Ctrl/Cmd + B
+    useEffect(() => {
+        const onKeyDown = (e) => {
+            // No mientras se escribe: Ctrl+B es negrita/marcadores en campos de texto
+            const tag = e.target?.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) return;
+            if (!e.repeat && (e.ctrlKey || e.metaKey) && e.key?.toLowerCase() === 'b') {
+                e.preventDefault();
+                toggleSidebar();
+            }
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [toggleSidebar]);
 
     const handleLogout = () => {
         setIsLoggingOut(true);
@@ -27,90 +89,97 @@ const MainLayout = ({ userRole, onLogout }) => {
         }, 2000); // Esperar 2 segundos antes de cerrar sesión real
     };
 
+    const navItems = [
+        { to: '/app/historial', label: 'Historial', Icon: HomeIcon, show: true },
+        { to: '/app/alta-usuario', label: 'Alta de usuario', Icon: UserPlusIcon, show: userRole === 'administrador' },
+        { to: '/app/gestion-pacientes', label: 'Gestión de pacientes', Icon: UsersIcon, show: userRole === 'atencion' },
+        { to: '/app/envio-archivos', label: 'Envío de archivos', Icon: ArrowUpTrayIcon, show: userRole === 'atencion' },
+    ].filter((item) => item.show);
+
+    const itemBase = 'flex items-center rounded-lg text-sm font-medium transition-colors duration-150 '
+        + 'focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-900/40 '
+        + (collapsed ? 'justify-center h-10 w-10 mx-auto' : 'gap-3 px-3 py-2.5');
+    const itemIdle = 'text-slate-600 hover:bg-slate-100 hover:text-slate-900';
+    const itemActive = 'bg-blue-900 text-white';
+
     return (
-        <div className="flex h-screen bg-gray-50 relative">
+        <div className="flex h-screen bg-slate-50 relative">
             {/* Overlay de Cierre de Sesión */}
             {isLoggingOut && (
-                <div className="absolute inset-0 bg-gray-900 bg-opacity-80 flex flex-col justify-center items-center z-50 transition-opacity duration-300">
-                    <div className="flex items-center justify-center space-x-2">
-                        <div
-                            className="w-12 h-12 rounded-full animate-spin border-4 border-solid border-white border-t-transparent"
-                            style={{ borderTopColor: 'transparent' }}
-                        ></div>
-                    </div>
-                    <p className="text-white text-xl font-semibold mt-4 animate-pulse">
-                        Cerrando sesión...
-                    </p>
+                <div className="absolute inset-0 bg-slate-900/80 flex flex-col justify-center items-center z-50">
+                    <div className="w-12 h-12 rounded-full animate-spin border-4 border-solid border-white border-t-transparent"></div>
+                    <p className="text-white text-xl font-semibold mt-4">Cerrando sesión…</p>
                 </div>
             )}
 
             {/* Barra Lateral */}
-            <aside className="w-64 bg-white shadow-lg flex flex-col">
-                <div className="p-4 border-b flex flex-col items-center">
-                    <img src={logo} alt="Logo" className="w-32 mx-auto" />
-                    <p className="text-center text-sm text-gray-500 mt-2 capitalize">Rol: {userRole}</p>
-                    <div className="mt-4 w-full flex justify-center">
+            <aside
+                id="app-sidebar"
+                className={`${collapsed ? 'w-16' : 'w-64'} flex-shrink-0 border-r border-slate-200 bg-white flex flex-col transition-[width] duration-150 ease-out motion-reduce:transition-none`}
+            >
+                <div className={`flex flex-col items-center border-b border-slate-200 ${collapsed ? 'px-2 py-3' : 'p-4'}`}>
+                    {collapsed ? (
+                        // Solo el escudo: ocupa ~78 de los 238 px de ancho del logotipo (proporción 28:40)
+                        <div className="h-10 w-7 overflow-hidden" title="Tecnológico Nacional de México">
+                            <img src={logo} alt="TecNM" className="h-10 w-auto max-w-none" />
+                        </div>
+                    ) : (
+                        <>
+                            <img src={logo} alt="Tecnológico Nacional de México" className="w-32 mx-auto" />
+                            <p className="mt-2 text-center text-xs text-slate-500">
+                                {ROLE_LABELS[userRole] || userRole}
+                            </p>
+                        </>
+                    )}
+                    <div className={`${collapsed ? 'mt-2' : 'mt-3'} w-full flex justify-center`}>
                         <NotificationBox userId={user?.uid} />
                     </div>
                 </div>
 
-                <nav className="flex-grow p-4">
-                    <NavLink
-                        to="/app/historial"
-                        className={({ isActive }) => `${linkStyle} ${isActive ? activeLinkStyle : ''}`}
-                    >
-                        <HomeIcon />
-                        <span className="ml-3 font-medium">Historial</span>
-                    </NavLink>
-
-                    {/* Enlace condicional para Administradores */}
-                    {userRole === 'administrador' && (
+                <nav className={`flex-grow space-y-1 ${collapsed ? 'px-2 py-3' : 'p-3'}`} aria-label="Navegación principal">
+                    {navItems.map((item) => (
                         <NavLink
-                            to="/app/alta-usuario"
-                            className={({ isActive }) => `${linkStyle} ${isActive ? activeLinkStyle : ''}`}
+                            key={item.to}
+                            to={item.to}
+                            title={collapsed ? item.label : undefined}
+                            aria-label={collapsed ? item.label : undefined}
+                            className={({ isActive }) => `${itemBase} ${isActive ? itemActive : itemIdle}`}
                         >
-                            <UserPlusIcon />
-                            <span className="ml-3 font-medium">Alta de Usuario</span>
+                            <item.Icon className="h-5 w-5 flex-shrink-0" />
+                            {!collapsed && <span>{item.label}</span>}
                         </NavLink>
-                    )}
-
-                    {/* Enlaces para Personal de Atención */}
-                    {userRole === 'atencion' && (
-                        <>
-                            <NavLink
-                                to="/app/gestion-pacientes"
-                                className={({ isActive }) => `${linkStyle} ${isActive ? activeLinkStyle : ''}`}
-                            >
-                                <PatientListIcon />
-                                <span className="ml-3 font-medium">Gestión de Pacientes</span>
-                            </NavLink>
-                            <NavLink
-                                to="/app/envio-archivos"
-                                className={({ isActive }) => `${linkStyle} ${isActive ? activeLinkStyle : ''}`}
-                            >
-                                <FileUploadIcon />
-                                <span className="ml-3 font-medium">Envío de Archivos</span>
-                            </NavLink>
-                        </>
-                    )}
+                    ))}
                 </nav>
 
-                {/* Botón de Cerrar Sesión */}
-                <div className="p-4 border-t">
+                <div className={`space-y-1 border-t border-slate-200 ${collapsed ? 'px-2 py-3' : 'p-3'}`}>
                     <button
                         onClick={handleLogout}
                         disabled={isLoggingOut}
-                        className="w-full flex items-center p-3 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                        title={collapsed ? 'Cerrar sesión' : undefined}
+                        aria-label={collapsed ? 'Cerrar sesión' : undefined}
+                        className={`${itemBase} w-full text-slate-600 hover:bg-red-50 hover:text-red-700 disabled:opacity-50 disabled:cursor-not-allowed`}
                     >
-                        <LogoutIcon />
-                        <span className="ml-3 font-bold">Cerrar Sesión</span>
+                        <ArrowRightStartOnRectangleIcon className="h-5 w-5 flex-shrink-0" />
+                        {!collapsed && <span>Cerrar sesión</span>}
+                    </button>
+                    <button
+                        onClick={toggleSidebar}
+                        aria-controls="app-sidebar"
+                        aria-expanded={!collapsed}
+                        title={`${collapsed ? 'Expandir' : 'Colapsar'} barra lateral (Ctrl+B)`}
+                        className={`${itemBase} w-full text-slate-500 hover:bg-slate-100 hover:text-slate-900`}
+                    >
+                        {collapsed
+                            ? <ChevronDoubleRightIcon className="h-5 w-5 flex-shrink-0" />
+                            : <ChevronDoubleLeftIcon className="h-5 w-5 flex-shrink-0" />}
+                        {!collapsed && <span>Colapsar</span>}
                     </button>
                 </div>
             </aside>
 
-            {/* Contenido Principal */}
-            <main className="flex-1 p-4 overflow-y-auto">
-                <Outlet /> {/* Aquí se renderizarán las rutas anidadas */}
+            {/* Contenido Principal: el visor ocupa todo el alto, sin margen */}
+            <main className={`flex-1 min-w-0 ${isViewer ? 'p-0 overflow-hidden' : 'p-4 overflow-y-auto'}`}>
+                <Outlet />
             </main>
         </div>
     );
